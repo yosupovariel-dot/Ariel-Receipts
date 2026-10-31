@@ -1,7 +1,7 @@
 // הגדרות כלליות של המערכת
 export const CONFIG = {
   // כתובת ה-Web app של Google Apps Script (מסתיימת ב-/exec). אם ריק — נשמרת בכל מכשיר בנפרד
-  driveUrl: '',
+  driveUrl: 'https://script.google.com/macros/s/AKfycbwWgMHOuCpuFdS7vroFl_6dMJguAX4mwFl5NO-UOBOtvliT9CpBxmoJoCVsuGHvFO3AHQ/exec',
 
   // קובץ נתונים התחלתי (ריק ומוצפן) — משמש רק בפעם הראשונה, לפני שיש נתונים ב-Drive
   seedPath: 'data/receipts.enc.json',
