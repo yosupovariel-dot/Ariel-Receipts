@@ -364,6 +364,8 @@ function viewDashboard() {
   else if (st.authError)
     banners.push(html`<div class="banner banner-err"><strong>החיבור ל-Drive לא עובד:</strong> הקוד שב-Apps Script לא תואם. <a href="#/archive">לתיקון</a></div>`);
   else if (st.pending) banners.push(html`<div class="banner banner-warn">יש שינויים שטרם נשמרו ב-Drive. <button class="link-btn" data-act="sync">שמירה עכשיו</button></div>`);
+  if (!data.receipts.some((r) => r.source === 'archive'))
+    banners.push(html`<div class="banner banner-info">יש לך קבלות ישנות (2024–2025)? <a href="#/archive/import">ייבוא אוטומטי</a> — בוחרים את קובץ ה-ZIP או את קובצי ה-PDF, והמערכת ממלאת הכל לבד.</div>`);
   if (!data.settings.numberConfirmed) banners.push(html`<div class="banner banner-info">הקבלה הבאה תקבל את המספר <strong>${nextNumber(data)}</strong>. לשינוי — <a href="#/settings#numbering">הגדרות מספור</a>.</div>`);
   if (ceiling && pct >= 85) banners.push(html`<div class="banner banner-err">שים לב: הגעת ל-${pct.toFixed(0)}% מתקרת המחזור של עוסק פטור לשנת ${year}. כדאי להתייעץ עם רואה חשבון.</div>`);
 
@@ -962,7 +964,8 @@ function viewReceipts(parts, q) {
     <div class="page-head">
       <h1>הקבלות שלי</h1>
       <div class="head-actions">
-        <button class="btn btn-ghost" id="add-archive">הוספת קבלה ישנה</button>
+        <a class="btn btn-ghost" href="#/archive/import">ייבוא קבלות ישנות</a>
+        <button class="btn btn-ghost" id="add-archive">הוספה ידנית</button>
         <button class="btn btn-ghost" id="export-csv">ייצוא לאקסל</button>
         <a href="#/new" class="btn btn-primary">＋ קבלה חדשה</a>
       </div>
@@ -1121,8 +1124,8 @@ async function archiveForm(existing, prefill = {}) {
 function viewArchive(parts, q) {
   const data = D();
   const st = store.state();
-  if (!driveUrl() || st.authError || q.get('setup')) return driveSetup(st);
   if (parts[1] === 'import') return viewImport();
+  if (!driveUrl() || st.authError || q.get('setup')) return driveSetup(st);
   main.innerHTML = html`<div class="page">
     <div class="page-head"><h1>ארכיון Google Drive</h1>
       <div class="head-actions"><a class="btn btn-ghost" href="#/archive?setup=1">הגדרות חיבור</a><button class="btn btn-ghost" id="reload">רענון</button><a class="btn btn-primary" href="#/archive/import">ייבוא אוטומטי של הקבלות</a></div></div>
@@ -1176,15 +1179,32 @@ function viewArchive(parts, q) {
   load();
 }
 
-/* ───────────────────────── ייבוא אוטומטי מ-Drive ───────────────────────── */
+/* ───────────────────────── ייבוא אוטומטי של קבלות קיימות ───────────────────────── */
+
+const scriptCache = {};
+function loadScript(src, globalName) {
+  if (window[globalName]) return Promise.resolve(window[globalName]);
+  return (scriptCache[src] ||= new Promise((res, rej) => {
+    const el = document.createElement('script');
+    el.src = src;
+    el.onload = () => res(window[globalName]);
+    el.onerror = () => rej(new Error('טעינה נכשלה: ' + src));
+    document.head.appendChild(el);
+  }));
+}
 
 function viewImport() {
   const data = D();
   main.innerHTML = html`<div class="page">
     <nav class="crumbs"><a href="#/archive">ארכיון Drive</a> <span aria-hidden="true">/</span> <span>ייבוא אוטומטי</span></nav>
     <div class="page-head"><div><h1>ייבוא הקבלות מ-Drive</h1>
-      <p class="muted">המערכת קוראת כל קובץ PDF בתיקיית הקבלות ומחלצת מספר, תאריך, לקוח, סכום ואמצעי תשלום. בודקים את הטבלה, מתקנים אם צריך — ומייבאים.</p></div></div>
-    <div class="card" id="imp-status"><button class="btn btn-primary btn-lg" id="imp-start">התחלת סריקה</button></div>
+      <p class="muted">המערכת קוראת את קובצי ה-PDF של הקבלות ומחלצת מספר, תאריך, לקוח, סכום ואמצעי תשלום. בודקים את הטבלה, מתקנים אם צריך — ומייבאים.</p></div></div>
+    <div class="card imp-drop" id="imp-status">
+      <label class="btn btn-primary btn-lg file-btn">בחירת קבצים מהמחשב (PDF או ZIP)
+        <input type="file" id="imp-files" accept=".pdf,.zip,application/pdf,application/zip" multiple class="sr-only"></label>
+      <p class="muted small">אפשר לבחור את קובץ ה-ZIP כמו שהוא, או לסמן כמה קובצי PDF ביחד (Ctrl+A בתיקייה). אפשר גם לגרור את הקבצים לכאן.</p>
+      ${driveUrl() ? html`<button class="link-btn" id="imp-start">או: סריקה ישירה מתיקיית ה-Drive</button>` : ''}
+    </div>
     <div id="imp-rows"></div>
   </div>`.__html;
 
@@ -1212,7 +1232,7 @@ function viewImport() {
           (r, i) => `<div class="card imp-row ${r.include ? '' : 'off'} ${r.missing.length ? 'warn' : ''}" data-i="${i}">
           <div class="imp-head">
             <label class="switch"><input type="checkbox" data-f="include" ${r.include ? 'checked' : ''}> ייבוא</label>
-            <a href="${esc(r.file.url)}" target="_blank" rel="noopener noreferrer" class="fname">${esc(r.file.name)} ↗</a>
+            ${r.file.url ? `<a href="${esc(r.file.url)}" target="_blank" rel="noopener noreferrer" class="fname">${esc(r.file.name)} ↗</a>` : `<span class="fname">${esc(r.file.name)}</span>`}
             ${r.note ? `<span class="chip ${r.dup ? 'chip-lav' : 'chip-err'}">${esc(r.note)}</span>` : ''}
           </div>
           <div class="grid3">
@@ -1246,11 +1266,60 @@ function viewImport() {
   });
 
   main.addEventListener('click', async (e) => {
-    if (e.target.id === 'imp-start') return scan(e.target);
+    if (e.target.id === 'imp-start') return scanDrive(e.target);
     if (e.target.id === 'imp-go' || e.target.id === 'imp-go2') return doImport();
   });
 
-  async function scan(btn) {
+  main.addEventListener('change', (e) => {
+    if (e.target.id === 'imp-files' && e.target.files.length) scanLocal([...e.target.files]);
+  });
+  main.addEventListener('dragover', (e) => {
+    if (e.target.closest('#imp-status')) e.preventDefault();
+  });
+  main.addEventListener('drop', (e) => {
+    if (!e.target.closest('#imp-status')) return;
+    e.preventDefault();
+    if (e.dataTransfer.files.length) scanLocal([...e.dataTransfer.files]);
+  });
+
+  /** קבצים מהמחשב (כולל פריסת ZIP) */
+  async function scanLocal(picked) {
+    const status = $('#imp-status');
+    status.innerHTML = '<p aria-live="polite" id="imp-msg">פותח את הקבצים…</p><div class="progress"><span id="imp-prog" style="width:0%"></span></div>';
+    const entries = [];
+    for (const f of picked) {
+      if (/\.zip$/i.test(f.name) || /zip/.test(f.type)) {
+        const JSZip = await loadScript('assets/vendor/jszip.min.js', 'JSZip');
+        const zip = await JSZip.loadAsync(f);
+        for (const z of Object.values(zip.files)) {
+          if (z.dir || !/\.pdf$/i.test(z.name) || /(^|\/)(__MACOSX|\.)/.test(z.name)) continue;
+          entries.push({ name: z.name.split('/').pop(), folder: z.name, created: (z.date ? new Date(z.date) : new Date()).toISOString(), bytes: () => z.async('uint8array') });
+        }
+      } else if (/\.pdf$/i.test(f.name) || f.type === 'application/pdf') {
+        entries.push({ name: f.name, created: new Date(f.lastModified || Date.now()).toISOString(), bytes: async () => new Uint8Array(await f.arrayBuffer()) });
+      }
+    }
+    if (!entries.length) {
+      status.innerHTML = '<p class="form-error">לא נמצאו קובצי PDF בקבצים שנבחרו.</p><label class="btn btn-primary file-btn">בחירה מחדש<input type="file" id="imp-files" accept=".pdf,.zip" multiple class="sr-only"></label>';
+      return;
+    }
+    // אם Drive מחובר — מקשרים כל קבלה לקובץ שלה ב-Drive לפי השם (לא חובה)
+    let byName = new Map();
+    if (driveUrl()) {
+      try {
+        const list = await driveList();
+        byName = new Map(Object.values(list.years || {}).flat().map((f) => [f.name, f]));
+      } catch {}
+    }
+    const files = entries.map((en) => {
+      const d = byName.get(en.name);
+      return { name: en.name, url: d?.url || '', id: d?.id || null, created: en.created, getBytes: en.bytes };
+    }).filter((f) => !f.id || !linkedIds.has(f.id));
+    return processFiles(files, false);
+  }
+
+  /** סריקה ישירה מתיקיית ה-Drive (דורש את גרסת הסקריפט העדכנית) */
+  async function scanDrive(btn) {
     btn.disabled = true;
     const status = $('#imp-status');
     status.innerHTML = '<p aria-live="polite" id="imp-msg">טוען את רשימת הקבצים מ-Drive…</p><div class="progress"><span id="imp-prog" style="width:0%"></span></div>';
@@ -1264,9 +1333,15 @@ function viewImport() {
     const files = Object.values(list.years || {})
       .flat()
       .filter((f) => /pdf/i.test(f.mime || '') || /\.pdf$/i.test(f.name))
-      .filter((f) => !linkedIds.has(f.id));
+      .filter((f) => !linkedIds.has(f.id))
+      .map((f) => ({ ...f, getBytes: async () => base64ToBytes((await driveGetFile(f.id)).data) }));
+    return processFiles(files, true);
+  }
+
+  async function processFiles(files, fromDrive) {
+    const status = $('#imp-status');
     if (!files.length) {
-      status.innerHTML = '<p>כל קובצי ה-PDF בתיקייה כבר רשומים במערכת. 🎉</p><a class="btn btn-ghost" href="#/receipts">לרשימת הקבלות</a>';
+      status.innerHTML = '<p>כל הקבלות כבר רשומות במערכת. 🎉</p><a class="btn btn-ghost" href="#/receipts">לרשימת הקבלות</a>';
       return;
     }
     let done = 0;
@@ -1278,8 +1353,7 @@ function viewImport() {
         let parsed = {};
         let note = '';
         try {
-          const res = await driveGetFile(f.id);
-          const lines = await pdfLines(base64ToBytes(res.data));
+          const lines = await pdfLines(await f.getBytes());
           parsed = parseReceipt(lines, f.name, data.business);
           if (!lines.length) note = 'קובץ סרוק — יש למלא ידנית';
         } catch (ex) {
@@ -1305,8 +1379,8 @@ function viewImport() {
     if (!$('#imp-status')) return;
     rows = results.sort((a, b) => (b.date || '').localeCompare(a.date || '') || Number(b.number) - Number(a.number));
     const missing = rows.filter((r) => r.missing.length && !r.dup).length;
-    status.innerHTML = failedApi
-      ? html`<div class="banner banner-err"><strong>צריך לעדכן את הקוד ב-Apps Script</strong> כדי שהמערכת תוכל לקרוא את הקבצים: <a href="#/archive?setup=1">צור את הקוד מחדש</a>, הדבק ב-Apps Script ופרסם "גרסה חדשה". ואז חזור לכאן.</div>`.__html
+    status.innerHTML = failedApi && fromDrive
+      ? html`<div class="banner banner-err"><strong>הסריקה הישירה מ-Drive לא זמינה בגרסת הסקריפט שלך.</strong> פשוט רענן את העמוד ובחר את הקבצים (או את ה-ZIP) מהמחשב.</div>`.__html
       : html`<p><strong>הסריקה הסתיימה.</strong> ${rows.length} קבצים נקראו${missing ? html` — ב-<strong>${missing}</strong> חסרים פרטים (מסומנים באדום), כדאי להשלים לפני הייבוא` : ' — כל הפרטים זוהו'}.</p>`.__html;
     renderRows();
   }
@@ -1336,8 +1410,8 @@ function viewImport() {
         client: { name: String(r.client || '').trim() || 'לא זוהה', taxId: r.taxId || '', phone: r.phone || '' },
         subject: String(r.subject || '').trim(),
         payments: [{ method: r.method || 'other', amount: round2(r.amount), date: r.date }],
-        driveUrl: r.file.url,
-        driveFileId: r.file.id,
+        driveUrl: r.file.url || undefined,
+        driveFileId: r.file.id || undefined,
       };
       rec.total = receiptTotal(rec);
       data.receipts.push(rec);
