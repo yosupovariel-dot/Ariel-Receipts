@@ -33,6 +33,8 @@ function doPost(e) {
         return json_({ ok: true, folder: root.getName(), years: list_(root) });
       case 'upload':
         return json_(Object.assign({ ok: true }, upload_(root, body)));
+      case 'getFile':
+        return json_(Object.assign({ ok: true }, getFile_(root, body)));
       case 'getData':
         return json_(Object.assign({ ok: true }, getData_(root)));
       case 'putData':
@@ -166,6 +168,24 @@ function upload_(root, body) {
   const blob = Utilities.newBlob(Utilities.base64Decode(body.data), body.mimeType || 'application/pdf', name);
   const file = folder.createFile(blob);
   return { id: file.getId(), url: file.getUrl(), year: year };
+}
+
+/** מחזיר קובץ (PDF) מתוך תיקיית הקבלות בלבד — לצורך ייבוא הפרטים לאתר */
+function getFile_(root, body) {
+  const file = DriveApp.getFileById(String(body.id || ''));
+  if (!inside_(file, root.getId(), 3)) throw new Error('הקובץ לא נמצא בתיקיית הקבלות');
+  const blob = file.getBlob();
+  return { name: file.getName(), mime: blob.getContentType(), data: Utilities.base64Encode(blob.getBytes()) };
+}
+
+function inside_(item, rootId, depth) {
+  if (depth < 0) return false;
+  const parents = item.getParents();
+  while (parents.hasNext()) {
+    const p = parents.next();
+    if (p.getId() === rootId || inside_(p, rootId, depth - 1)) return true;
+  }
+  return false;
 }
 
 function json_(obj) {

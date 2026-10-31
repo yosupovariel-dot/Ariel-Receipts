@@ -9,7 +9,8 @@ import {
 import * as store from './store.js';
 import { session } from './store.js';
 import { receiptHTML, receiptPdf, printReceipt, pdfFileName } from './receipt-doc.js';
-import { drive, driveUrl, driveConfigured, drivePing, driveList, driveUpload } from './drive.js';
+import { drive, driveUrl, driveConfigured, drivePing, driveList, driveUpload, driveGetFile } from './drive.js';
+import { pdfLines, parseReceipt, base64ToBytes } from './pdf-import.js';
 import { LEGAL } from './legal.js';
 import { initA11y } from './a11y.js';
 
@@ -1121,9 +1122,10 @@ function viewArchive(parts, q) {
   const data = D();
   const st = store.state();
   if (!driveUrl() || st.authError || q.get('setup')) return driveSetup(st);
+  if (parts[1] === 'import') return viewImport();
   main.innerHTML = html`<div class="page">
     <div class="page-head"><h1>ארכיון Google Drive</h1>
-      <div class="head-actions"><a class="btn btn-ghost" href="#/archive?setup=1">הגדרות חיבור</a><button class="btn btn-primary" id="reload">רענון</button></div></div>
+      <div class="head-actions"><a class="btn btn-ghost" href="#/archive?setup=1">הגדרות חיבור</a><button class="btn btn-ghost" id="reload">רענון</button><a class="btn btn-primary" href="#/archive/import">ייבוא אוטומטי של הקבלות</a></div></div>
     <p class="muted">כל קובצי הקבלות בתיקיית ה-Drive שלך, מסודרים לפי שנים. קבצים שאינם רשומים במערכת אפשר להוסיף לסיכומים בלחיצה.</p>
     <div id="drive-list"><div class="card loading" aria-busy="true">טוען מ-Google Drive…</div></div>
   </div>`.__html;
@@ -1172,6 +1174,188 @@ function viewArchive(parts, q) {
   });
   $('#reload').onclick = load;
   load();
+}
+
+/* ───────────────────────── ייבוא אוטומטי מ-Drive ───────────────────────── */
+
+function viewImport() {
+  const data = D();
+  main.innerHTML = html`<div class="page">
+    <nav class="crumbs"><a href="#/archive">ארכיון Drive</a> <span aria-hidden="true">/</span> <span>ייבוא אוטומטי</span></nav>
+    <div class="page-head"><div><h1>ייבוא הקבלות מ-Drive</h1>
+      <p class="muted">המערכת קוראת כל קובץ PDF בתיקיית הקבלות ומחלצת מספר, תאריך, לקוח, סכום ואמצעי תשלום. בודקים את הטבלה, מתקנים אם צריך — ומייבאים.</p></div></div>
+    <div class="card" id="imp-status"><button class="btn btn-primary btn-lg" id="imp-start">התחלת סריקה</button></div>
+    <div id="imp-rows"></div>
+  </div>`.__html;
+
+  let rows = [];
+  const existingNums = new Set(data.receipts.map((r) => String(r.number)));
+  const linkedIds = new Set(data.receipts.map((r) => r.driveFileId).filter(Boolean));
+
+  const methodOpts = (sel) => Object.entries(PAYMENT_METHODS).map(([k, m]) => `<option value="${k}" ${k === sel ? 'selected' : ''}>${esc(m.label)}</option>`).join('');
+
+  function renderRows() {
+    const box = $('#imp-rows');
+    if (!box) return;
+    if (!rows.length) {
+      box.innerHTML = '';
+      return;
+    }
+    const sel = rows.filter((r) => r.include).length;
+    box.innerHTML = `
+      <div class="card imp-bar">
+        <span><strong>${rows.length}</strong> קבצים · <strong id="imp-count">${sel}</strong> מסומנים לייבוא</span>
+        <button class="btn btn-primary" id="imp-go" ${sel ? '' : 'disabled'}>ייבוא הקבלות המסומנות</button>
+      </div>
+      ${rows
+        .map(
+          (r, i) => `<div class="card imp-row ${r.include ? '' : 'off'} ${r.missing.length ? 'warn' : ''}" data-i="${i}">
+          <div class="imp-head">
+            <label class="switch"><input type="checkbox" data-f="include" ${r.include ? 'checked' : ''}> ייבוא</label>
+            <a href="${esc(r.file.url)}" target="_blank" rel="noopener noreferrer" class="fname">${esc(r.file.name)} ↗</a>
+            ${r.note ? `<span class="chip ${r.dup ? 'chip-lav' : 'chip-err'}">${esc(r.note)}</span>` : ''}
+          </div>
+          <div class="grid3">
+            <div class="field"><label>מספר קבלה</label><input data-f="number" dir="ltr" inputmode="numeric" value="${esc(r.number)}" ${!r.number ? 'aria-invalid="true"' : ''}></div>
+            <div class="field"><label>תאריך</label><input data-f="date" type="date" value="${esc(r.date)}" ${!r.date ? 'aria-invalid="true"' : ''}></div>
+            <div class="field"><label>סכום (₪)</label><input data-f="amount" type="number" step="0.01" dir="ltr" value="${esc(r.amount)}" ${!r.amount ? 'aria-invalid="true"' : ''}></div>
+          </div>
+          <div class="grid3">
+            <div class="field"><label>לקוח</label><input data-f="client" value="${esc(r.client)}" ${!r.client ? 'aria-invalid="true"' : ''}></div>
+            <div class="field"><label>עבור</label><input data-f="subject" value="${esc(r.subject)}"></div>
+            <div class="field"><label>אמצעי תשלום</label><select data-f="method">${methodOpts(r.method)}</select></div>
+          </div>
+        </div>`
+        )
+        .join('')}
+      <div class="card imp-bar"><span></span><button class="btn btn-primary" id="imp-go2" ${sel ? '' : 'disabled'}>ייבוא הקבלות המסומנות</button></div>`;
+  }
+
+  main.addEventListener('input', (e) => {
+    const card = e.target.closest('.imp-row');
+    const f = e.target.dataset.f;
+    if (!card || !f) return;
+    const r = rows[Number(card.dataset.i)];
+    r[f] = f === 'include' ? e.target.checked : e.target.value;
+    if (f === 'include') {
+      card.classList.toggle('off', !r.include);
+      const n = rows.filter((x) => x.include).length;
+      $('#imp-count').textContent = n;
+      $$('#imp-go, #imp-go2').forEach((b) => (b.disabled = !n));
+    } else e.target.removeAttribute('aria-invalid');
+  });
+
+  main.addEventListener('click', async (e) => {
+    if (e.target.id === 'imp-start') return scan(e.target);
+    if (e.target.id === 'imp-go' || e.target.id === 'imp-go2') return doImport();
+  });
+
+  async function scan(btn) {
+    btn.disabled = true;
+    const status = $('#imp-status');
+    status.innerHTML = '<p aria-live="polite" id="imp-msg">טוען את רשימת הקבצים מ-Drive…</p><div class="progress"><span id="imp-prog" style="width:0%"></span></div>';
+    let list;
+    try {
+      list = await driveList();
+    } catch (ex) {
+      status.innerHTML = html`<p class="form-error">לא ניתן לטעון מ-Drive: ${ex.message}</p>`.__html;
+      return;
+    }
+    const files = Object.values(list.years || {})
+      .flat()
+      .filter((f) => /pdf/i.test(f.mime || '') || /\.pdf$/i.test(f.name))
+      .filter((f) => !linkedIds.has(f.id));
+    if (!files.length) {
+      status.innerHTML = '<p>כל קובצי ה-PDF בתיקייה כבר רשומים במערכת. 🎉</p><a class="btn btn-ghost" href="#/receipts">לרשימת הקבלות</a>';
+      return;
+    }
+    let done = 0;
+    const results = new Array(files.length);
+    let failedApi = false;
+    const worker = async (startAt) => {
+      for (let i = startAt; i < files.length; i += 3) {
+        const f = files[i];
+        let parsed = {};
+        let note = '';
+        try {
+          const res = await driveGetFile(f.id);
+          const lines = await pdfLines(base64ToBytes(res.data));
+          parsed = parseReceipt(lines, f.name, data.business);
+          if (!lines.length) note = 'קובץ סרוק — יש למלא ידנית';
+        } catch (ex) {
+          if (/פעולה לא מוכרת/.test(ex.message)) failedApi = true;
+          note = 'לא נקרא — יש למלא ידנית';
+          const n = f.name.match(/(\d{4,7})/);
+          parsed = { number: n ? n[1] : '', date: f.created.slice(0, 10), method: 'other' };
+        }
+        const row = { file: f, number: '', date: '', client: '', taxId: '', phone: '', subject: '', amount: '', method: 'other', ...parsed, note };
+        row.dup = !!row.number && existingNums.has(String(row.number));
+        if (row.dup) row.note = 'כבר קיימת במערכת';
+        row.missing = ['number', 'date', 'client', 'amount'].filter((k) => !row[k]);
+        row.include = !row.dup;
+        results[i] = row;
+        done++;
+        const prog = $('#imp-prog');
+        if (prog) prog.style.width = ((done / files.length) * 100).toFixed(0) + '%';
+        const msg = $('#imp-msg');
+        if (msg) msg.textContent = `קורא קבצים… ${done} מתוך ${files.length}`;
+      }
+    };
+    await Promise.all([0, 1, 2].map(worker));
+    if (!$('#imp-status')) return;
+    rows = results.sort((a, b) => (b.date || '').localeCompare(a.date || '') || Number(b.number) - Number(a.number));
+    const missing = rows.filter((r) => r.missing.length && !r.dup).length;
+    status.innerHTML = failedApi
+      ? html`<div class="banner banner-err"><strong>צריך לעדכן את הקוד ב-Apps Script</strong> כדי שהמערכת תוכל לקרוא את הקבצים: <a href="#/archive?setup=1">צור את הקוד מחדש</a>, הדבק ב-Apps Script ופרסם "גרסה חדשה". ואז חזור לכאן.</div>`.__html
+      : html`<p><strong>הסריקה הסתיימה.</strong> ${rows.length} קבצים נקראו${missing ? html` — ב-<strong>${missing}</strong> חסרים פרטים (מסומנים באדום), כדאי להשלים לפני הייבוא` : ' — כל הפרטים זוהו'}.</p>`.__html;
+    renderRows();
+  }
+
+  async function doImport() {
+    const chosen = rows.filter((r) => r.include);
+    const bad = chosen.filter((r) => !r.number || !r.date || !(Number(r.amount) > 0) || !String(r.client).trim());
+    if (bad.length) {
+      const ok = await confirmBox('חסרים פרטים', `ב-${bad.length} קבלות חסר מספר, תאריך, לקוח או סכום. הן ייובאו עם מה שיש (אפשר לערוך אחר כך מתוך הקבלה). להמשיך?`, 'כן, לייבא');
+      if (!ok) return;
+    }
+    const nums = new Set(data.receipts.map((r) => String(r.number)));
+    let added = 0;
+    for (const r of chosen) {
+      const num = Number(r.number) || 0;
+      if (num && nums.has(String(num))) continue;
+      nums.add(String(num));
+      const rec = {
+        id: crypto.randomUUID(),
+        source: 'archive',
+        status: 'issued',
+        number: num,
+        date: r.date || r.file.created.slice(0, 10),
+        issuedAt: (r.date || r.file.created.slice(0, 10)) + 'T12:00:00',
+        updatedAt: new Date().toISOString(),
+        business: { ...data.business },
+        client: { name: String(r.client || '').trim() || 'לא זוהה', taxId: r.taxId || '', phone: r.phone || '' },
+        subject: String(r.subject || '').trim(),
+        payments: [{ method: r.method || 'other', amount: round2(r.amount), date: r.date }],
+        driveUrl: r.file.url,
+        driveFileId: r.file.id,
+      };
+      rec.total = receiptTotal(rec);
+      data.receipts.push(rec);
+      if (rec.client.name !== 'לא זוהה') upsertClient(data, rec.client);
+      added++;
+    }
+    audit(data, 'archive-add', `ייבוא אוטומטי של ${added} קבלות מ-Drive`);
+    await persist('ייבוא קבלות');
+    const maxNum = data.receipts.reduce((m, r) => Math.max(m, Number(r.number) || 0), 0);
+    await modal({
+      title: 'הייבוא הושלם',
+      body: html`<p><strong>${added}</strong> קבלות נוספו למערכת. הסיכומים בדף הראשי מעודכנים.</p>
+        <p>המספר הגבוה ביותר במערכת: <strong>${maxNum}</strong>. הקבלה הבאה תקבל את המספר <strong>${nextNumber(data)}</strong>.</p>
+        <p class="muted small">אם זה לא המספר הנכון — אפשר לשנות בהגדרות ← מספור.</p>`,
+      actions: [{ label: 'לרשימת הקבלות', value: true }],
+    });
+    location.hash = '#/receipts';
+  }
 }
 
 /** מסך חיבור Drive: מייצר קוד Apps Script מוכן להדבקה */

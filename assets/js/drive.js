@@ -69,3 +69,6 @@ export async function driveUpload(blob, fileName, year) {
   });
   return driveCall({ action: 'upload', fileName, year: String(year), mimeType: 'application/pdf', data: base64 });
 }
+
+/** מוריד קובץ מתיקיית הקבלות (base64) */
+export const driveGetFile = (id) => driveCall({ action: 'getFile', id });

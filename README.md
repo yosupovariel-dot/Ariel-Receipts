@@ -72,4 +72,4 @@
 | `google-apps-script/Code.gs` | הגשר ל-Google Drive |
 | `tools/create-data.mjs` | יצירת קובץ נתונים ריק (לאיפוס בלבד) |
 
-רכיבי צד שלישי: [html2pdf.js](https://github.com/eKoopmans/html2pdf.js) (MIT), גופנים Heebo ו-Frank Ruhl Libre (SIL OFL) — כולם מאוחסנים מקומית באתר.
+רכיבי צד שלישי: [html2pdf.js](https://github.com/eKoopmans/html2pdf.js) (MIT), [pdf.js](https://github.com/mozilla/pdf.js) (Apache-2.0, לייבוא קבלות קיימות), גופנים Heebo ו-Frank Ruhl Libre (SIL OFL) — כולם מאוחסנים מקומית באתר.

@@ -408,3 +408,10 @@ html.a11y-cursor, html.a11y-cursor * { cursor: url("data:image/svg+xml,%3Csvg xm
   body.printing #print-root { display: block; }
 }
 .code-area { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 0.8rem; text-align: left; background: #f7f9fc; }
+.imp-bar { display: flex; justify-content: space-between; align-items: center; gap: 1rem; flex-wrap: wrap; position: sticky; top: 0.5rem; z-index: 5; }
+.imp-row { padding: 1rem 1.1rem 0.25rem; }
+.imp-row.off { opacity: 0.55; }
+.imp-row.warn { border-color: #f4bfc8; }
+.imp-head { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; margin-bottom: 0.5rem; }
+.imp-head .switch { margin: 0; }
+.imp-row .field label { font-size: 0.8rem; }
