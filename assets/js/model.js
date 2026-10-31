@@ -87,6 +87,7 @@ export function emptyData() {
       defaultSubject: '',
     },
     clients: [],
+    ledger: [], // הכנסות ללא קבלה והוצאות
     receipts: [],
     audit: [],
   };
@@ -99,6 +100,7 @@ export function normalize(data) {
   data.business = { ...base.business, ...(data.business || {}) };
   data.settings = { ...base.settings, ...(data.settings || {}) };
   data.clients = data.clients || [];
+  data.ledger = data.ledger || [];
   data.receipts = data.receipts || [];
   data.audit = data.audit || [];
   data.version = data.version || 1;
@@ -171,6 +173,12 @@ export function mergeData(local, remote) {
     if (seen.has(r.number)) r.conflict = true;
     seen.set(r.number, r);
   }
+  const lById = new Map(out.ledger.map((e) => [e.id, e]));
+  for (const e of local.ledger || []) {
+    const o = lById.get(e.id);
+    if (!o) out.ledger.push(e);
+    else if ((e.updatedAt || '') > (o.updatedAt || '')) Object.assign(o, e);
+  }
   const cById = new Map(out.clients.map((c) => [c.name, c]));
   for (const c of local.clients) if (!cById.has(c.name)) out.clients.push(c);
   out.settings = { ...out.settings, ...local.settings };
@@ -181,4 +189,24 @@ export function mergeData(local, remote) {
   for (const a of local.audit) if (!auditKeys.has(a.ts + a.action)) out.audit.push(a);
   out.audit.sort((a, b) => a.ts.localeCompare(b.ts));
   return out;
+}
+
+/* ───── הכנסות והוצאות מחוץ לקבלות ───── */
+
+export const LEDGER_INCOME_CATS = ['מזומן', 'העברה', 'ביט', 'אחר'];
+export const LEDGER_EXPENSE_CATS = ['שותף', 'פרסום ושיווק', 'תוכנות ומנויים', 'ציוד', 'נסיעות', 'אחר'];
+
+export const activeLedger = (data) => (data.ledger || []).filter((e) => !e.deleted);
+
+/** סיכום כספי. year = מספר שנה, או null לכל השנים */
+export function financials(data, year = null) {
+  const inYear = (d) => year === null || Number(String(d || '').slice(0, 4)) === year;
+  const receipts = data.receipts.filter((r) => isActive(r) && inYear(r.date));
+  const ledger = activeLedger(data).filter((e) => (year === null ? true : e.date && inYear(e.date)));
+  const sum = (arr, f) => round2(arr.reduce((s, x) => s + (Number(f(x)) || 0), 0));
+  const declared = sum(receipts, receiptTotal);
+  const undeclared = sum(ledger.filter((e) => e.type === 'income'), (e) => e.amount);
+  const expenses = sum(ledger.filter((e) => e.type === 'expense'), (e) => e.amount);
+  const total = round2(declared + undeclared);
+  return { declared, undeclared, total, expenses, net: round2(total - expenses), count: receipts.length };
 }

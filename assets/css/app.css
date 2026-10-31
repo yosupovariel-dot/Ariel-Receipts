@@ -415,3 +415,43 @@ html.a11y-cursor, html.a11y-cursor * { cursor: url("data:image/svg+xml,%3Csvg xm
 .imp-head { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; margin-bottom: 0.5rem; }
 .imp-head .switch { margin: 0; }
 .imp-row .field label { font-size: 0.8rem; }
+
+/* ─── סיכום כל השנים ─── */
+.totals-grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 0.75rem; margin-bottom: 1rem; }
+.tot { border-radius: 14px; padding: 0.85rem 1rem; display: flex; flex-direction: column; gap: 0.15rem; border: 1px solid rgba(255,255,255,0.7); }
+.tot span { font-size: 0.82rem; font-weight: 600; color: var(--ink-2); }
+.tot strong { font-size: 1.25rem; font-variant-numeric: tabular-nums; }
+.tot small { color: var(--muted); font-size: 0.75rem; }
+.tot-blue { background: linear-gradient(135deg, #d9ecff, #c3e0ff); }
+.tot-lav { background: linear-gradient(135deg, #ebebff, #d9dbff); }
+.tot-mint { background: linear-gradient(135deg, #e0f7ef, #c7efe1); }
+.tot-peach { background: linear-gradient(135deg, #fff3e6, #ffe3c8); }
+.tot-net { background: linear-gradient(135deg, #2f6fcf, #2a62b8); color: #fff; }
+.tot-net span { color: #dbe8ff; }
+.table-wrap { overflow-x: auto; }
+.ytable { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; font-size: 0.92rem; }
+.ytable th, .ytable td { padding: 0.55rem 0.6rem; text-align: right; border-bottom: 1px solid var(--line); white-space: nowrap; }
+.ytable thead th { font-size: 0.8rem; color: var(--muted); font-weight: 600; }
+.ytable .total-row th, .ytable .total-row td { border-top: 2px solid var(--ink); border-bottom: 0; background: var(--baby); }
+.ytable .muted-row { color: var(--muted); }
+.summary-4 { grid-template-columns: repeat(4, 1fr); }
+.seg { display: inline-flex; background: var(--baby); border-radius: 999px; padding: 4px; gap: 4px; margin-bottom: 1rem; }
+.seg label { cursor: pointer; }
+.seg input { position: absolute; opacity: 0; }
+.seg span { display: inline-block; padding: 0.45rem 1rem; border-radius: 999px; font-weight: 600; color: var(--ink-2); }
+.seg input:checked + span { background: #fff; color: var(--primary); box-shadow: var(--shadow); }
+.seg input:focus-visible + span { box-shadow: var(--focus); }
+.llist { list-style: none; margin: 0; padding: 0; }
+.llist li { display: grid; grid-template-columns: auto 1fr auto auto; gap: 0.75rem; align-items: center; padding: 0.7rem 0.25rem; }
+.llist li + li { border-top: 1px solid var(--line); }
+.lmain { display: flex; flex-direction: column; min-width: 0; }
+.lamt { font-variant-numeric: tabular-nums; }
+.lamt.income { color: var(--ok); }
+.lamt.expense { color: var(--err); }
+.lact { display: flex; gap: 0.3rem; }
+@media (max-width: 1100px) { .totals-grid { grid-template-columns: repeat(3, 1fr); } .tot-net { grid-column: span 3; } }
+@media (max-width: 640px) {
+  .totals-grid { grid-template-columns: 1fr 1fr; } .tot-net { grid-column: 1 / -1; }
+  .summary-4 { grid-template-columns: 1fr 1fr; }
+  .llist li { grid-template-columns: auto 1fr auto; } .lact { grid-column: 1 / -1; justify-content: flex-end; }
+}

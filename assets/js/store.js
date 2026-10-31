@@ -175,6 +175,12 @@ async function mergeBundledArchive(password) {
     upsertClient(d, rec.client);
     added++;
   }
+  const ledgerIds = new Set((d.ledger || []).map((e) => e.id));
+  for (const e of bundle.ledger || []) {
+    if (ledgerIds.has(e.id)) continue;
+    (d.ledger ||= []).push({ ...e });
+    added++;
+  }
   d.settings.nextNumber = Math.max(Number(d.settings.nextNumber) || 0, Number(bundle.minNextNumber) || 0);
   d.settings.archiveImportVersion = bundle.version;
   if (added) audit(d, 'archive-add', `ייבוא ${added} קבלות היסטוריות (2025–2026)`);

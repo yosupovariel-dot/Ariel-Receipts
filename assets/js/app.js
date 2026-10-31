@@ -5,6 +5,7 @@ import { html, raw, esc, $, $$, uid, fmtMoney, fmtDate, fmtDateTime, todayISO, M
 import {
   PAYMENT_METHODS, FIELD_LABELS, paymentDetails, methodLabel, receiptTotal, isActive, nextNumber, yearOf,
   sortedReceipts, totalsForYear, lastIssuedDate, upsertClient, audit, mergeData,
+  financials, activeLedger, LEDGER_INCOME_CATS, LEDGER_EXPENSE_CATS,
 } from './model.js';
 import * as store from './store.js';
 import { session } from './store.js';
@@ -213,7 +214,7 @@ function showLogin(msg) {
 function enterApp() {
   const imported = session.importedNow;
   session.importedNow = 0;
-  if (imported) setTimeout(() => toast(`${imported} קבלות היסטוריות נוספו למערכת (2025–2026)`, 'ok', 6000), 400);
+  if (imported) setTimeout(() => toast(`הנתונים ההיסטוריים נוספו למערכת (${imported} רשומות)`, 'ok', 6000), 400);
   $('#login-view').hidden = true;
   $('#login-view').innerHTML = '';
   $('#app').hidden = false;
@@ -287,7 +288,7 @@ function parseHash() {
   return { parts: path.split('/').filter(Boolean), q: new URLSearchParams(qs || '') };
 }
 
-const titles = { '': 'ראשי', new: 'קבלה חדשה', receipts: 'קבלות', r: 'קבלה', archive: 'ארכיון Drive', clients: 'לקוחות', settings: 'הגדרות', legal: 'מידע משפטי' };
+const titles = { '': 'ראשי', new: 'קבלה חדשה', receipts: 'קבלות', r: 'קבלה', archive: 'ארכיון Drive', clients: 'לקוחות', ledger: 'הכנסות והוצאות', settings: 'הגדרות', legal: 'מידע משפטי' };
 
 function route() {
   const { parts, q } = parseHash();
@@ -306,7 +307,7 @@ function route() {
     else a.removeAttribute('aria-current');
   });
 
-  const views = { '': viewDashboard, new: viewNew, receipts: viewReceipts, r: viewReceipt, archive: viewArchive, clients: viewClients, settings: viewSettings };
+  const views = { '': viewDashboard, new: viewNew, receipts: viewReceipts, r: viewReceipt, archive: viewArchive, clients: viewClients, ledger: viewLedger, settings: viewSettings };
   const fn = views[page] || viewDashboard;
   document.title = `${titles[page] || 'ראשי'} | מערכת הקבלות — אריאל יוסופוב`;
   while (cleanups.length) cleanups.pop()();
@@ -386,6 +387,7 @@ function viewDashboard() {
       <div class="kpi kpi-lav"><span class="kpi-label">קבלות השנה</span><strong class="kpi-value">${yt.count}</strong></div>
       <div class="kpi kpi-sky"><span class="kpi-label">הקבלה הבאה</span><strong class="kpi-value">${nextNumber(data)}</strong></div>
     </section>
+    ${allYearsSection(data)}
     ${ceiling
       ? html`<section class="card ceiling" aria-label="תקרת עוסק פטור">
         <div class="ceiling-head"><span>תקרת עוסק פטור ${year}</span><span>${fmtMoney(yt.sum)} מתוך ${fmtMoney(ceiling)}</span></div>
@@ -433,6 +435,144 @@ function receiptList(list) {
       </li>`
     )}
   </ul>`;
+}
+
+/* ───────────────────────── סיכום כל השנים ───────────────────────── */
+
+function allYearsSection(data) {
+  const all = financials(data);
+  const years = [...new Set([...data.receipts.map(yearOf), ...activeLedger(data).filter((e) => e.date).map((e) => Number(e.date.slice(0, 4)))])].sort((a, b) => b - a);
+  const undated = activeLedger(data).filter((e) => !e.date);
+  const und = {
+    undeclared: round2(undated.filter((e) => e.type === 'income').reduce((s, e) => s + Number(e.amount), 0)),
+    expenses: round2(undated.filter((e) => e.type === 'expense').reduce((s, e) => s + Number(e.amount), 0)),
+  };
+  const row = (label, f, cls = '') => html`<tr class="${cls}"><th scope="row">${label}</th><td>${fmtMoney(f.declared)}</td><td>${fmtMoney(f.undeclared)}</td><td><strong>${fmtMoney(f.total)}</strong></td><td>${fmtMoney(f.expenses)}</td><td><strong>${fmtMoney(f.net)}</strong></td></tr>`;
+  return html`<section class="card totals" aria-labelledby="totals-h">
+    <div class="card-head"><h2 id="totals-h">כל השנים — התמונה הכוללת</h2><a href="#/ledger">הכנסות והוצאות ←</a></div>
+    <div class="totals-grid">
+      <div class="tot tot-blue"><span>הכנסות עם קבלות</span><strong>${fmtMoney(all.declared)}</strong><small>${all.count} קבלות</small></div>
+      <div class="tot tot-lav"><span>הכנסות ללא קבלה</span><strong>${fmtMoney(all.undeclared)}</strong></div>
+      <div class="tot tot-mint"><span>הכנסה כוללת</span><strong>${fmtMoney(all.total)}</strong></div>
+      <div class="tot tot-peach"><span>הוצאות</span><strong>${fmtMoney(all.expenses)}</strong></div>
+      <div class="tot tot-net"><span>נשאר לעסק (נטו)</span><strong>${fmtMoney(all.net)}</strong></div>
+    </div>
+    <div class="table-wrap">
+      <table class="ytable">
+        <thead><tr><th scope="col">שנה</th><th scope="col">עם קבלות</th><th scope="col">ללא קבלה</th><th scope="col">כולל</th><th scope="col">הוצאות</th><th scope="col">נטו</th></tr></thead>
+        <tbody>
+          ${years.map((y) => row(String(y), financials(data, y)))}
+          ${undated.length ? row('ללא שנה', { declared: 0, undeclared: und.undeclared, total: und.undeclared, expenses: und.expenses, net: round2(und.undeclared - und.expenses) }, 'muted-row') : ''}
+        </tbody>
+        <tfoot>${row('סה״כ', all, 'total-row')}</tfoot>
+      </table>
+    </div>
+  </section>`;
+}
+
+/* ───────────────────────── הכנסות והוצאות ───────────────────────── */
+
+function viewLedger() {
+  const data = D();
+  const render = () => {
+    const f = financials(data);
+    const list = activeLedger(data).sort((a, b) => (b.date || '0').localeCompare(a.date || '0') || (b.createdAt || '').localeCompare(a.createdAt || ''));
+    main.innerHTML = html`<div class="page">
+      <div class="page-head"><div><h1>הכנסות והוצאות</h1>
+        <p class="muted">הכנסות שהתקבלו בלי קבלה והוצאות של העסק. נכללות בסיכום הכולל בדף הראשי — לא בקבלות, לא במספור ולא בייצוא הקבלות.</p></div></div>
+      <div class="summary-strip summary-4">
+        <div><span>עם קבלות</span><strong>${fmtMoney(f.declared)}</strong></div>
+        <div><span>ללא קבלה</span><strong>${fmtMoney(f.undeclared)}</strong></div>
+        <div><span>הוצאות</span><strong>${fmtMoney(f.expenses)}</strong></div>
+        <div><span>נטו כולל</span><strong>${fmtMoney(f.net)}</strong></div>
+      </div>
+      <section class="card">
+        <h2>הוספה</h2>
+        <form id="led-form" novalidate>
+          <div class="seg" role="radiogroup" aria-label="סוג">
+            <label><input type="radio" name="type" value="income" checked> <span>הכנסה ללא קבלה</span></label>
+            <label><input type="radio" name="type" value="expense"> <span>הוצאה</span></label>
+          </div>
+          <div class="grid3">
+            <div class="field"><label for="l-amt">סכום (₪) <span class="req">*</span></label><input id="l-amt" name="amount" type="number" inputmode="decimal" step="0.01" min="0.01" dir="ltr" required></div>
+            <div class="field"><label for="l-date">תאריך (לא חובה)</label><input id="l-date" name="date" type="date"><small class="hint">לא זוכר? השאר ריק — ייכנס לסיכום הכולל.</small></div>
+            <div class="field"><label for="l-cat">קטגוריה</label><select id="l-cat" name="category"></select></div>
+          </div>
+          <div class="field"><label for="l-desc">תיאור</label><input id="l-desc" name="description" placeholder="לדוגמה: עבודה על אתר — תשלום במזומן"></div>
+          <button class="btn btn-primary">הוספה</button>
+        </form>
+      </section>
+      <section class="card">
+        <div class="card-head"><h2>רשומות</h2><span class="muted">${list.length}</span></div>
+        ${list.length
+          ? html`<ul class="llist">${list.map(
+              (e) => html`<li>
+                <span class="chip ${e.type === 'income' ? 'chip-ok' : 'chip-err'}">${e.type === 'income' ? 'הכנסה' : 'הוצאה'}</span>
+                <span class="lmain"><strong>${e.description || e.category || '—'}</strong><small class="muted">${[e.category, e.date ? fmtDate(e.date) : 'ללא תאריך'].filter(Boolean).join(' · ')}</small></span>
+                <strong class="lamt ${e.type}">${e.type === 'expense' ? '−' : '+'}${fmtMoney(e.amount)}</strong>
+                <span class="lact"><button class="btn btn-ghost btn-sm" data-edit="${e.id}">עריכה</button><button class="btn btn-danger-ghost btn-sm" data-del="${e.id}">מחיקה</button></span>
+              </li>`
+            )}</ul>`
+          : html`<div class="empty"><p>עוד אין רשומות.</p></div>`}
+      </section>
+    </div>`.__html;
+
+    const cat = $('#l-cat');
+    const fillCats = () => {
+      const type = $('#led-form').type.value;
+      cat.innerHTML = (type === 'income' ? LEDGER_INCOME_CATS : LEDGER_EXPENSE_CATS).map((c) => `<option>${esc(c)}</option>`).join('');
+    };
+    fillCats();
+    $$('#led-form input[name=type]').forEach((r) => (r.onchange = fillCats));
+    $('#led-form').onsubmit = async (ev) => {
+      ev.preventDefault();
+      const fd = Object.fromEntries(new FormData(ev.target));
+      if (!(Number(fd.amount) > 0)) {
+        $('#l-amt').setAttribute('aria-invalid', 'true');
+        $('#l-amt').focus();
+        return toast('נא להזין סכום', 'error');
+      }
+      const now = new Date().toISOString();
+      data.ledger.push({ id: crypto.randomUUID(), type: fd.type, amount: round2(fd.amount), date: fd.date || '', category: fd.category, description: fd.description.trim(), createdAt: now, updatedAt: now });
+      audit(data, 'ledger', `${fd.type === 'income' ? 'הכנסה' : 'הוצאה'} ${fmtMoney(fd.amount)}`);
+      await persist();
+      toast('נוסף');
+      render();
+      $('#l-amt').focus();
+    };
+  };
+
+  main.addEventListener('click', async (e) => {
+    const del = e.target.closest('[data-del]')?.dataset.del;
+    const edit = e.target.closest('[data-edit]')?.dataset.edit;
+    if (del) {
+      const it = data.ledger.find((x) => x.id === del);
+      if (!(await confirmBox('מחיקה', `למחוק את "${it.description || it.category}" (${fmtMoney(it.amount)})?`, 'מחיקה', true))) return;
+      it.deleted = true;
+      it.updatedAt = new Date().toISOString();
+      audit(data, 'ledger', `מחיקה ${fmtMoney(it.amount)}`);
+      await persist();
+      render();
+    }
+    if (edit) {
+      const it = data.ledger.find((x) => x.id === edit);
+      const cats = it.type === 'income' ? LEDGER_INCOME_CATS : LEDGER_EXPENSE_CATS;
+      const res = await modal({
+        title: it.type === 'income' ? 'עריכת הכנסה' : 'עריכת הוצאה',
+        body: html`<div class="grid2">
+          <div class="field"><label for="le-amt">סכום (₪)</label><input id="le-amt" name="amount" type="number" step="0.01" min="0.01" dir="ltr" required value="${it.amount}"></div>
+          <div class="field"><label for="le-date">תאריך</label><input id="le-date" name="date" type="date" value="${it.date || ''}"></div></div>
+          <div class="grid2"><div class="field"><label for="le-cat">קטגוריה</label><select id="le-cat" name="category">${cats.map((c) => html`<option ${c === it.category ? 'selected' : ''}>${c}</option>`)}</select></div>
+          <div class="field"><label for="le-desc">תיאור</label><input id="le-desc" name="description" value="${it.description || ''}"></div></div>`,
+        actions: [{ label: 'ביטול', value: null }, { label: 'שמירה', submit: true }],
+      });
+      if (!res) return;
+      Object.assign(it, { amount: round2(res.amount), date: res.date || '', category: res.category, description: res.description.trim(), updatedAt: new Date().toISOString() });
+      await persist();
+      render();
+    }
+  });
+  render();
 }
 
 /* ───────────────────────── קבלה חדשה ───────────────────────── */
@@ -1788,7 +1928,7 @@ function viewSettings() {
 
 function auditLabel(a) {
   return (
-    { issue: 'הפקה:', cancel: 'ביטול:', original: 'מסירת מקור:', drive: 'Drive:', 'drive-connect': 'חיבור Drive:', business: 'עדכון פרטי עסק', numbering: 'שינוי מספור:', password: 'החלפת סיסמה', import: 'מיזוג גיבוי:', 'archive-add': 'ארכיון — הוספה:', 'archive-edit': 'ארכיון — עריכה:' }[a] || a
+    { issue: 'הפקה:', cancel: 'ביטול:', original: 'מסירת מקור:', drive: 'Drive:', 'drive-connect': 'חיבור Drive:', business: 'עדכון פרטי עסק', numbering: 'שינוי מספור:', password: 'החלפת סיסמה', import: 'מיזוג גיבוי:', 'archive-add': 'ארכיון — הוספה:', 'archive-edit': 'ארכיון — עריכה:', ledger: 'הכנסות/הוצאות:' }[a] || a
   );
 }
 
