@@ -2,7 +2,7 @@
 
 import { CONFIG } from './config.js';
 import { b64, unb64, deriveRaw, deriveAuth, importAes, encryptJson, decryptJson, ITERATIONS, randomBytes } from './crypto.js';
-import { normalize, mergeData } from './model.js';
+import { normalize, mergeData, upsertClient, audit } from './model.js';
 import { drive, driveUrl, saveDriveUrl, drivePing, driveGetData, drivePutData, driveRotate } from './drive.js';
 
 const LS_CACHE = 'ar_cache_v1';
@@ -105,7 +105,7 @@ export async function login(password) {
   Object.assign(session, { key, raw, salt, iterations, data });
   if (res.from === 'drive') session.version = res.version;
   saveSession();
-  await afterUnlock(res);
+  await afterUnlock(res, password);
   return session.data;
 }
 
@@ -140,7 +140,50 @@ export async function restoreSession() {
   return true;
 }
 
-async function afterUnlock(res) {
+/** קבלות היסטוריות שהוכנו מראש (מוצפנות בסיסמה) — מתמזגות אוטומטית פעם אחת */
+async function mergeBundledArchive(password) {
+  let env;
+  try {
+    const r = await fetch('data/archive.enc.json?t=' + Date.now(), { cache: 'no-store' });
+    if (!r.ok) return 0;
+    env = await r.json();
+  } catch {
+    return 0;
+  }
+  let bundle;
+  try {
+    bundle = await decryptJson(env, session.key);
+  } catch {
+    if (!password) return 0;
+    try {
+      const raw = await deriveRaw(password, unb64(env.kdf.salt), env.kdf.iterations);
+      bundle = await decryptJson(env, await importAes(raw));
+    } catch {
+      return 0;
+    }
+  }
+  const d = session.data;
+  if ((Number(d.settings.archiveImportVersion) || 0) >= bundle.version) return 0;
+  const byNum = new Map(d.receipts.map((r) => [String(r.number), r]));
+  let added = 0;
+  for (const r of bundle.receipts) {
+    const ex = byNum.get(String(r.number));
+    if (ex && (ex.source === 'archive' || ex.id === r.id)) continue;
+    const rec = { ...r };
+    if (ex) rec.conflict = ex.conflict = true; // מספר זהה לקבלה שהופקה במערכת — לבדיקה
+    d.receipts.push(rec);
+    upsertClient(d, rec.client);
+    added++;
+  }
+  d.settings.nextNumber = Math.max(Number(d.settings.nextNumber) || 0, Number(bundle.minNextNumber) || 0);
+  d.settings.archiveImportVersion = bundle.version;
+  if (added) audit(d, 'archive-add', `ייבוא ${added} קבלות היסטוריות (2025–2026)`);
+  return added;
+}
+
+async function afterUnlock(res, password) {
+  session.importedNow = await mergeBundledArchive(password);
+  if (session.importedNow) lsSet(LS_PENDING, '1');
   // שינויים מקומיים שטרם נשמרו ב-Drive
   if (res.from === 'drive') {
     const cached = lsGet(LS_CACHE);

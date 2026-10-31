@@ -211,6 +211,9 @@ function showLogin(msg) {
 }
 
 function enterApp() {
+  const imported = session.importedNow;
+  session.importedNow = 0;
+  if (imported) setTimeout(() => toast(`${imported} קבלות היסטוריות נוספו למערכת (2025–2026)`, 'ok', 6000), 400);
   $('#login-view').hidden = true;
   $('#login-view').innerHTML = '';
   $('#app').hidden = false;
@@ -364,8 +367,6 @@ function viewDashboard() {
   else if (st.authError)
     banners.push(html`<div class="banner banner-err"><strong>החיבור ל-Drive לא עובד:</strong> הקוד שב-Apps Script לא תואם. <a href="#/archive">לתיקון</a></div>`);
   else if (st.pending) banners.push(html`<div class="banner banner-warn">יש שינויים שטרם נשמרו ב-Drive. <button class="link-btn" data-act="sync">שמירה עכשיו</button></div>`);
-  if (!data.receipts.some((r) => r.source === 'archive'))
-    banners.push(html`<div class="banner banner-info">יש לך קבלות ישנות (2024–2025)? <a href="#/archive/import">ייבוא אוטומטי</a> — בוחרים את קובץ ה-ZIP או את קובצי ה-PDF, והמערכת ממלאת הכל לבד.</div>`);
   if (!data.settings.numberConfirmed) banners.push(html`<div class="banner banner-info">הקבלה הבאה תקבל את המספר <strong>${nextNumber(data)}</strong>. לשינוי — <a href="#/settings#numbering">הגדרות מספור</a>.</div>`);
   if (ceiling && pct >= 85) banners.push(html`<div class="banner banner-err">שים לב: הגעת ל-${pct.toFixed(0)}% מתקרת המחזור של עוסק פטור לשנת ${year}. כדאי להתייעץ עם רואה חשבון.</div>`);
 
@@ -805,7 +806,7 @@ function viewReceipt(parts, q) {
             <div><dt>עבור</dt><dd>${r.subject || '—'}</dd></div>
             <div><dt>אמצעי תשלום</dt><dd>${(r.payments || []).map((p) => methodLabel(p.method) + (paymentDetails(p) ? ' — ' + paymentDetails(p) : '')).join(', ') || '—'}</dd></div>
           </dl>
-          ${r.driveUrl ? html`<a class="btn btn-primary" href="${r.driveUrl}" target="_blank" rel="noopener noreferrer">פתיחת הקבלה המקורית ב-Drive ↗</a>` : html`<p class="muted">לא מקושר קובץ.</p>`}
+          ${r.driveUrl ? html`<a class="btn btn-primary" href="${r.driveUrl}" target="_blank" rel="noopener noreferrer">פתיחת הקבלה המקורית ב-Drive ↗</a>` : html`<span id="drive-find" class="muted">${driveUrl() ? 'מחפש את הקובץ ב-Drive…' : 'הקובץ המקורי שמור בתיקיית הקבלות ב-Drive.'}</span>`}
           <button class="btn btn-ghost" data-act="edit-archive">עריכת הרשומה</button>
         </div>`
       : html`
@@ -837,6 +838,17 @@ function viewReceipt(parts, q) {
     </div>`}
   </div>`.__html;
 
+  if (isArchive && !r.driveUrl && driveUrl()) {
+    driveList()
+      .then((res) => {
+        const f = Object.values(res.years || {}).flat().find((x) => x.name.includes(String(r.number)));
+        const el = $('#drive-find');
+        if (!el) return;
+        if (f) el.outerHTML = html`<a class="btn btn-primary" href="${f.url}" target="_blank" rel="noopener noreferrer">פתיחת הקבלה המקורית ב-Drive ↗</a>`.__html;
+        else el.textContent = 'הקובץ לא נמצא ב-Drive.';
+      })
+      .catch(() => $('#drive-find') && ($('#drive-find').textContent = 'הקובץ המקורי שמור בתיקיית הקבלות ב-Drive.'));
+  }
   if (!isArchive) {
     const scale = $('#preview-scale');
     const render = () => {

@@ -176,6 +176,7 @@ export function mergeData(local, remote) {
   out.settings = { ...out.settings, ...local.settings };
   out.business = { ...out.business, ...local.business };
   out.settings.nextNumber = Math.max(Number(local.settings.nextNumber) || 0, Number(remote.settings?.nextNumber) || 0);
+  out.settings.archiveImportVersion = Math.max(Number(local.settings.archiveImportVersion) || 0, Number(remote.settings?.archiveImportVersion) || 0);
   const auditKeys = new Set(out.audit.map((a) => a.ts + a.action));
   for (const a of local.audit) if (!auditKeys.has(a.ts + a.action)) out.audit.push(a);
   out.audit.sort((a, b) => a.ts.localeCompare(b.ts));
