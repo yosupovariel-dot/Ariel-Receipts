@@ -1126,7 +1126,7 @@ function viewArchive() {
         </ol>
         <form id="drive-form" class="drive-form">
           <div class="field"><label for="d-url">כתובת ה-Web app</label><input id="d-url" type="url" dir="ltr" required placeholder="https://script.google.com/macros/s/…/exec"></div>
-          <input type="hidden" id="d-secret">
+          <div class="field"><label for="d-secret">קוד סודי (זהה לשורת SECRET בסקריפט)</label><input id="d-secret" dir="ltr" required autocomplete="off" spellcheck="false"></div>
           <button class="btn btn-primary">חיבור ובדיקה</button>
         </form>
       </section>
