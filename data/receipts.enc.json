@@ -1,0 +1,15 @@
+{
+ "format": "ariel-receipts/1",
+ "kdf": {
+  "name": "PBKDF2",
+  "hash": "SHA-256",
+  "iterations": 600000,
+  "salt": "jEX4r7oV0ATYR2Ly9YxqMA=="
+ },
+ "cipher": {
+  "name": "AES-GCM",
+  "iv": "VSEfEPLKdsxCABML"
+ },
+ "data": "upm0GAbOiFp8lmvs4gXRwL7AL0hAE88qxX/xH+Uj8qTgRzO/VrOTNq85l6LkEH2sBjvIGf6WRe2e8K7Kruc6a4vZn+gUXISwQMW5H7aQRXBHEVD/eMm2YDDBJ7zdSvSDTZQTlAus+ifbZ2mX2hTuvNieMiw2kubi5lWG3jjnaGGi6gE/6GW3y2CuX5xUbIVg2rwsE8ksYE7viqfagF3UB7g9ZX/HlbdWHop1a5Wj/gIw4GceOuw5qmbOnvOdYlhmHfQ8nLJtVyuisb/+LOTdE7TZ5tCJhh7UCR3TAo2OFqTgsD6isEfv787CkItEWiKdAVODyixtwWjMCWpEtfHqNZAP6v/Vf9OL7CaEj4v7HnFe9dWkFfTFi+fPQ/tsGFw246O3Jz4AMt0WuiaYyYsuSpfEa2OLFGVzd9tOr5DXk8HD7CIdSApSRSLRtPmEsE+jFtdOkw6ttmo1B9FRdg7Ddp86g4lkF4R7OH7EMkuoXCBrlXgt1MHCcfQpMG6yFVowXyh7SRuuKW7KQoJ2r85fH4q+kINF1dIOorgtbU7Iq74EwAYDNRkYkT4XJqZX8aZnFydEre+LPP6R+bM4gEkiv9YlZmRUBxJfh4/8QVi7sJxUsbU/QTjx5ssHwitZYo/gCowkvQS4bEKmXWpO5BbpQuOYuVqhMIwi",
+ "updatedAt": "2026-10-31T21:31:18.425Z"
+}

@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' https://api.github.com https://script.google.com https://script.googleusercontent.com; worker-src 'self' blob:; base-uri 'self'; form-action 'self' mailto:; object-src 'none'">
+  <meta name="referrer" content="no-referrer">
+  <meta name="robots" content="noindex, nofollow">
+  <meta name="theme-color" content="#cfe6ff">
+  <meta name="description" content="מערכת הפקת קבלות — אריאל יוסופוב עיצוב אתרים">
+  <title>מערכת הקבלות — אריאל יוסופוב</title>
+  <link rel="icon" href="assets/img/logo.jpg">
+  <link rel="apple-touch-icon" href="assets/img/logo.jpg">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="stylesheet" href="assets/css/fonts.css">
+  <link rel="stylesheet" href="assets/css/app.css">
+  <link rel="stylesheet" href="assets/css/receipt.css">
+  <script type="module" src="assets/js/app.js"></script>
+</head>
+<body>
+  <a class="skip-link" href="#main">דלג לתוכן הראשי</a>
+
+  <div id="boot" class="boot" hidden aria-live="polite"><div class="spinner" aria-hidden="true"></div><span>טוען…</span></div>
+
+  <div id="login-view" class="login-view" hidden></div>
+
+  <div id="app" class="shell" hidden>
+    <aside class="sidebar" aria-label="תפריט ראשי">
+      <div class="brand">
+        <img src="assets/img/logo.jpg" alt="" width="44" height="44">
+        <div><strong>הקבלות של אריאל</strong><small>עיצוב אתרים</small></div>
+      </div>
+      <nav class="nav" aria-label="ניווט ראשי">
+        <a href="#/"><span class="ni" aria-hidden="true">⌂</span><span>ראשי</span></a>
+        <a href="#/new" class="nav-new"><span class="ni" aria-hidden="true">＋</span><span>קבלה חדשה</span></a>
+        <a href="#/receipts"><span class="ni" aria-hidden="true">☰</span><span>קבלות</span></a>
+        <a href="#/clients"><span class="ni" aria-hidden="true">☺</span><span>לקוחות</span></a>
+        <a href="#/archive"><span class="ni" aria-hidden="true">☁</span><span>Drive</span></a>
+        <a href="#/settings"><span class="ni" aria-hidden="true">⚙</span><span>הגדרות</span></a>
+      </nav>
+      <div class="sidebar-foot">
+        <div id="sync" class="sync" role="status" aria-live="polite"></div>
+        <button id="logout" class="btn btn-ghost btn-sm btn-block">יציאה</button>
+        <nav class="legal-links" aria-label="מידע משפטי">
+          <a href="#/legal/terms">תנאי שימוש</a>
+          <a href="#/legal/privacy">פרטיות</a>
+          <a href="#/legal/accessibility">נגישות</a>
+          <a href="#/legal/receipts">תאימות לחוק</a>
+        </nav>
+      </div>
+    </aside>
+    <main id="main" class="main" tabindex="-1"></main>
+  </div>
+
+  <button id="a11y-toggle" class="a11y-toggle" aria-expanded="false" aria-controls="a11y-panel" aria-label="תפריט נגישות">
+    <svg viewBox="0 0 24 24" width="26" height="26" aria-hidden="true" focusable="false"><circle cx="12" cy="4" r="2" fill="currentColor"/><path d="M4 8.5l8 1.5 8-1.5M12 10v5m0 0l-3.5 6M12 15l3.5 6" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round"/></svg>
+  </button>
+  <div id="a11y-panel" class="a11y-panel" role="dialog" aria-labelledby="a11y-title" hidden></div>
+
+  <dialog id="modal" class="modal"></dialog>
+  <div id="toasts" class="toasts"></div>
+  <div id="live" class="sr-only" aria-live="polite"></div>
+  <noscript><p style="padding:2rem;text-align:center">יש להפעיל JavaScript כדי להשתמש במערכת.</p></noscript>
+</body>
+</html>

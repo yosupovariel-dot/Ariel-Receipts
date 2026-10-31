@@ -1,0 +1,11 @@
+{
+  "name": "מערכת הקבלות — אריאל יוסופוב",
+  "short_name": "קבלות",
+  "start_url": "./",
+  "display": "standalone",
+  "dir": "rtl",
+  "lang": "he",
+  "background_color": "#f3f8ff",
+  "theme_color": "#cfe6ff",
+  "icons": [{ "src": "assets/img/logo.jpg", "sizes": "268x268", "type": "image/jpeg" }]
+}
