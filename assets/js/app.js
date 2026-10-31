@@ -945,6 +945,7 @@ function viewReceipt(parts, q) {
           <dl class="kv">
             <div><dt>עבור</dt><dd>${r.subject || '—'}</dd></div>
             <div><dt>אמצעי תשלום</dt><dd>${(r.payments || []).map((p) => methodLabel(p.method) + (paymentDetails(p) ? ' — ' + paymentDetails(p) : '')).join(', ') || '—'}</dd></div>
+            ${r.notes ? html`<div><dt>הערה</dt><dd>${r.notes}</dd></div>` : ''}
           </dl>
           ${r.driveUrl ? html`<a class="btn btn-primary" href="${r.driveUrl}" target="_blank" rel="noopener noreferrer">פתיחת הקבלה המקורית ב-Drive ↗</a>` : html`<span id="drive-find" class="muted">${driveUrl() ? 'מחפש את הקובץ ב-Drive…' : 'הקובץ המקורי שמור בתיקיית הקבלות ב-Drive.'}</span>`}
           <button class="btn btn-ghost" data-act="edit-archive">עריכת הרשומה</button>

@@ -175,6 +175,14 @@ async function mergeBundledArchive(password) {
     upsertClient(d, rec.client);
     added++;
   }
+  // תיקונים לרשומות ארכיון שכבר יובאו בגרסה קודמת
+  for (const pt of bundle.patches || []) {
+    const r = d.receipts.find((x) => x.id === pt.id && x.source === 'archive');
+    if (!r || (r.patched || []).includes(pt.key)) continue;
+    Object.assign(r, pt.set, { updatedAt: new Date().toISOString(), patched: [...(r.patched || []), pt.key] });
+    r.total = (r.payments || []).reduce((s, p) => s + (Number(p.amount) || 0), 0);
+    added++;
+  }
   const ledgerIds = new Set((d.ledger || []).map((e) => e.id));
   for (const e of bundle.ledger || []) {
     if (ledgerIds.has(e.id)) continue;
