@@ -2,25 +2,28 @@
  * מערכת הקבלות של אריאל — גשר ל-Google Drive
  * ------------------------------------------------
  * הסקריפט רץ בחשבון הגוגל שלך, וניגש רק לתיקייה שהגדרת ב-FOLDER_ID.
- * הוא יודע: לרשום את הקבלות שכבר יש בתיקייה (לפי שנים), להעלות קבלה חדשה
- * לתיקיית השנה המתאימה (ויוצר אותה אם חסרה), ולשמור גיבוי מוצפן של הנתונים.
+ * הוא שומר את קובץ הנתונים (מוצפן) של המערכת, מעלה כל קבלה כ-PDF לתיקיית
+ * השנה המתאימה, מציג את הקבלות הקיימות, ושומר גיבוי יומי של הנתונים.
  *
- * הוראות התקנה מלאות: בקובץ README.md במאגר (סעיף "חיבור Google Drive").
+ * את הקוד המלא עם הערכים הנכונים מקבלים מתוך האתר: עמוד Drive.
  */
 
 // 1) מזהה תיקיית הקבלות הראשית — החלק שאחרי folders/ בכתובת התיקייה
 const FOLDER_ID = 'PASTE_FOLDER_ID_HERE';
 
-// 2) קוד סודי — אותו קוד מדביקים בהגדרות האתר. אל תשתף אותו.
-const SECRET = 'PASTE_A_LONG_RANDOM_SECRET_HERE';
+// 2) קוד הגישה — מוצג באתר בעמוד Drive (נגזר מהסיסמה; לא לשתף)
+const SECRET = 'PASTE_SECRET_FROM_SITE';
 
-const BACKUP_FOLDER = '_גיבוי נתוני מערכת';
+const SYSTEM_FOLDER = '_גיבוי נתוני מערכת';
+const DATA_FILE = 'receipts-data.enc.json';
+const KEEP_DAILY_DAYS = 60;
 
 function doPost(e) {
   try {
     const body = JSON.parse(e.postData.contents || '{}');
-    if (!SECRET || SECRET.indexOf('PASTE_') === 0 || body.secret !== SECRET) {
-      return json_({ ok: false, error: 'קוד סודי שגוי' });
+    const secret = currentSecret_();
+    if (!secret || secret.indexOf('PASTE_') === 0 || body.secret !== secret) {
+      return json_({ ok: false, auth: false, error: 'קוד סודי שגוי' });
     }
     const root = DriveApp.getFolderById(FOLDER_ID);
     switch (body.action) {
@@ -30,8 +33,14 @@ function doPost(e) {
         return json_({ ok: true, folder: root.getName(), years: list_(root) });
       case 'upload':
         return json_(Object.assign({ ok: true }, upload_(root, body)));
-      case 'backup':
-        return json_(Object.assign({ ok: true }, backup_(root, body)));
+      case 'getData':
+        return json_(Object.assign({ ok: true }, getData_(root)));
+      case 'putData':
+        return json_(putData_(root, body));
+      case 'rotate':
+        if (!body.newSecret || String(body.newSecret).length < 32) return json_({ ok: false, error: 'קוד חדש לא תקין' });
+        PropertiesService.getScriptProperties().setProperty('SECRET', String(body.newSecret));
+        return json_({ ok: true });
       default:
         return json_({ ok: false, error: 'פעולה לא מוכרת' });
     }
@@ -42,6 +51,69 @@ function doPost(e) {
 
 function doGet() {
   return json_({ ok: true, service: 'ariel-receipts-drive' });
+}
+
+function currentSecret_() {
+  return PropertiesService.getScriptProperties().getProperty('SECRET') || SECRET;
+}
+
+function systemFolder_(root) {
+  const it = root.getFoldersByName(SYSTEM_FOLDER);
+  return it.hasNext() ? it.next() : root.createFolder(SYSTEM_FOLDER);
+}
+
+function dataFile_(root) {
+  const it = systemFolder_(root).getFilesByName(DATA_FILE);
+  return it.hasNext() ? it.next() : null;
+}
+
+function version_() {
+  return PropertiesService.getScriptProperties().getProperty('DATA_VERSION') || '0';
+}
+
+function getData_(root) {
+  const f = dataFile_(root);
+  return { data: f ? f.getBlob().getDataAsString('UTF-8') : null, version: version_() };
+}
+
+function putData_(root, body) {
+  const lock = LockService.getScriptLock();
+  lock.waitLock(20000);
+  try {
+    const f = dataFile_(root);
+    const cur = version_();
+    // מישהו שמר בינתיים ממכשיר אחר — הלקוח ימזג וינסה שוב
+    if (f && body.baseVersion !== undefined && body.baseVersion !== null && String(body.baseVersion) !== cur) {
+      return { ok: false, conflict: true, version: cur };
+    }
+    const text = String(body.data || '');
+    if (!text) return { ok: false, error: 'נתונים ריקים' };
+    if (f) f.setContent(text);
+    else systemFolder_(root).createFile(DATA_FILE, text, 'application/json');
+    const next = String(Number(cur) + 1);
+    PropertiesService.getScriptProperties().setProperty('DATA_VERSION', next);
+    dailyBackup_(root, text);
+    return { ok: true, version: next };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+/** עותק גיבוי אחד לכל יום; שומר 60 יום אחרונים + את ה-1 לכל חודש לתמיד */
+function dailyBackup_(root, text) {
+  const folder = systemFolder_(root);
+  const tz = 'Asia/Jerusalem';
+  const name = 'backup-' + Utilities.formatDate(new Date(), tz, 'yyyy-MM-dd') + '.enc.json';
+  const ex = folder.getFilesByName(name);
+  if (ex.hasNext()) ex.next().setContent(text);
+  else folder.createFile(name, text, 'application/json');
+  const cutoff = Date.now() - KEEP_DAILY_DAYS * 86400000;
+  const all = folder.getFiles();
+  while (all.hasNext()) {
+    const f = all.next();
+    const m = f.getName().match(/^backup-(\d{4})-(\d{2})-(\d{2})\.enc\.json$/);
+    if (m && m[3] !== '01' && new Date(m[1] + '-' + m[2] + '-' + m[3]).getTime() < cutoff) f.setTrashed(true);
+  }
 }
 
 function list_(root) {
@@ -61,7 +133,7 @@ function list_(root) {
   while (folders.hasNext()) {
     const sub = folders.next();
     const name = sub.getName();
-    if (name === BACKUP_FOLDER) continue;
+    if (name === SYSTEM_FOLDER) continue;
     const m = name.match(/(19|20)\d{2}/);
     const label = m ? m[0] : name;
     const files = sub.getFiles();
@@ -77,37 +149,23 @@ function list_(root) {
 function yearFolder_(root, year) {
   const exact = root.getFoldersByName(year);
   if (exact.hasNext()) return exact.next();
-  if (/^\d{4}$/.test(year)) {
-    const all = root.getFolders();
-    while (all.hasNext()) {
-      const f = all.next();
-      if (new RegExp('(^|\\D)' + year + '(\\D|$)').test(f.getName())) return f;
-    }
-    return root.createFolder('קבלות ' + year);
+  const all = root.getFolders();
+  while (all.hasNext()) {
+    const f = all.next();
+    if (new RegExp('(^|\\D)' + year + '(\\D|$)').test(f.getName())) return f;
   }
-  return root.createFolder(year);
+  return root.createFolder('קבלות ' + year);
 }
 
 function upload_(root, body) {
   const year = String(body.year || new Date().getFullYear()).replace(/[^0-9]/g, '').slice(0, 4);
   const folder = yearFolder_(root, year);
   const name = String(body.fileName || 'קבלה.pdf').replace(/[\\/:*?"<>|]/g, ' ');
-  // קובץ קיים באותו שם — מעבירים לאשפה ומחליפים
   const existing = folder.getFilesByName(name);
   while (existing.hasNext()) existing.next().setTrashed(true);
   const blob = Utilities.newBlob(Utilities.base64Decode(body.data), body.mimeType || 'application/pdf', name);
   const file = folder.createFile(blob);
   return { id: file.getId(), url: file.getUrl(), year: year };
-}
-
-function backup_(root, body) {
-  const folder = yearFolder_(root, BACKUP_FOLDER);
-  const stamp = Utilities.formatDate(new Date(), 'Asia/Jerusalem', 'yyyy-MM');
-  const name = 'receipts-backup-' + stamp + '.enc.json';
-  const existing = folder.getFilesByName(name);
-  while (existing.hasNext()) existing.next().setTrashed(true);
-  const file = folder.createFile(name, String(body.data || ''), 'application/json');
-  return { id: file.getId(), name: name };
 }
 
 function json_(obj) {

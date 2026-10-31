@@ -407,3 +407,4 @@ html.a11y-cursor, html.a11y-cursor * { cursor: url("data:image/svg+xml,%3Csvg xm
   body.printing { background: #fff !important; }
   body.printing #print-root { display: block; }
 }
+.code-area { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 0.8rem; text-align: left; background: #f7f9fc; }

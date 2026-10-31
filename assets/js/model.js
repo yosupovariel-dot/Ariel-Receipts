@@ -83,8 +83,6 @@ export function emptyData() {
       nextNumber: 80018,
       numberConfirmed: false,
       ceiling: 120000,
-      driveUrl: '',
-      driveSecret: '',
       driveAutoUpload: true,
       defaultSubject: '',
     },

@@ -1,15 +1,13 @@
-// שמירה וטעינה: GitHub (מקור האמת) + עותק מוצפן מקומי לגיבוי ולעבודה ללא רשת
+// שמירה וטעינה: Google Drive (מקור האמת) + עותק מוצפן מקומי לגיבוי ולעבודה ללא רשת
 
 import { CONFIG } from './config.js';
-import { b64, unb64, deriveRaw, importAes, encryptJson, decryptJson, encryptString, decryptString, ITERATIONS } from './crypto.js';
+import { b64, unb64, deriveRaw, deriveAuth, importAes, encryptJson, decryptJson, ITERATIONS, randomBytes } from './crypto.js';
 import { normalize, mergeData } from './model.js';
+import { drive, driveUrl, saveDriveUrl, drivePing, driveGetData, drivePutData, driveRotate } from './drive.js';
 
 const LS_CACHE = 'ar_cache_v1';
 const LS_PENDING = 'ar_pending_v1';
-const LS_TOKEN = 'ar_token_v1';
 const SS_SESSION = 'ar_session_v1';
-
-const API = 'https://api.github.com';
 
 export const session = {
   key: null,
@@ -17,16 +15,15 @@ export const session = {
   salt: null,
   iterations: ITERATIONS,
   data: null,
-  sha: null,
-  token: null,
-  branch: null,
-  online: true,
+  version: null, // גרסת הקובץ ב-Drive
+  driveOk: false,
+  driveError: null, // 'auth' | 'network' | null
   lastSync: null,
 };
 
 const listeners = new Set();
 export const onSyncChange = (fn) => listeners.add(fn);
-const emit = (state) => listeners.forEach((fn) => fn(state));
+const emit = (extra = {}) => listeners.forEach((fn) => fn({ ...state(), ...extra }));
 
 function lsGet(k) {
   try {
@@ -43,87 +40,72 @@ function lsSet(k, v) {
 }
 
 export const hasPending = () => lsGet(LS_PENDING) === '1';
+const driveUsable = () => !!(driveUrl() && drive.secret && session.driveError !== 'auth');
 
-function ghHeaders(json = true) {
-  const h = { Accept: json ? 'application/vnd.github+json' : 'application/vnd.github.raw+json', 'X-GitHub-Api-Version': '2022-11-28' };
-  if (session.token) h.Authorization = 'Bearer ' + session.token;
-  return h;
+export function state() {
+  return {
+    configured: !!driveUrl(),
+    connected: session.driveOk,
+    authError: session.driveError === 'auth',
+    pending: hasPending(),
+    lastSync: session.lastSync,
+  };
 }
 
-async function getBranch() {
-  if (session.branch) return session.branch;
-  if (CONFIG.branch) return (session.branch = CONFIG.branch);
-  try {
-    const r = await fetch(`${API}/repos/${CONFIG.owner}/${CONFIG.repo}`, { headers: ghHeaders(), cache: 'no-store' });
-    if (r.ok) {
-      const j = await r.json();
-      return (session.branch = j.default_branch);
-    }
-  } catch {}
-  return 'main';
+/** מביא את הנתונים מ-Drive. מחזיר {envelope, version} או null אם אין עדיין קובץ */
+async function fetchDrive() {
+  const res = await driveGetData();
+  session.driveOk = true;
+  session.driveError = null;
+  return { envelope: res.data ? JSON.parse(res.data) : null, version: res.version };
 }
 
-/** מביא את הקובץ המוצפן מ-GitHub. מחזיר {envelope, sha} או null */
-async function fetchRemote() {
-  const branch = await getBranch();
-  const url = `${API}/repos/${CONFIG.owner}/${CONFIG.repo}/contents/${CONFIG.dataPath}?ref=${encodeURIComponent(branch)}&t=${Date.now()}`;
-  const r = await fetch(url, { headers: ghHeaders(), cache: 'no-store' });
-  if (r.status === 404) return { envelope: null, sha: null };
-  if (!r.ok) throw new Error('github ' + r.status);
-  const j = await r.json();
-  let content = j.content;
-  if (!content && j.sha) {
-    const b = await fetch(`${API}/repos/${CONFIG.owner}/${CONFIG.repo}/git/blobs/${j.sha}`, { headers: ghHeaders(), cache: 'no-store' });
-    content = (await b.json()).content;
-  }
-  const text = new TextDecoder().decode(unb64(content.replace(/\s/g, '')));
-  return { envelope: JSON.parse(text), sha: j.sha };
-}
-
-/** טעינה עם נפילה לאחור: GitHub API → קובץ באתר → עותק מקומי */
+/** טעינה: Drive → עותק מקומי → קובץ התחלתי */
 async function loadEnvelope() {
-  try {
-    const res = await fetchRemote();
-    if (res.envelope) {
-      session.online = true;
-      return { ...res, from: 'github' };
+  let driveEmpty = false;
+  if (driveUrl() && drive.secret) {
+    try {
+      const res = await fetchDrive();
+      if (res.envelope) return { envelope: res.envelope, version: res.version, from: 'drive' };
+      driveEmpty = true;
+      session.version = res.version;
+    } catch (e) {
+      session.driveOk = false;
+      session.driveError = e.auth ? 'auth' : 'network';
+      console.warn('Drive לא זמין', e);
     }
-  } catch (e) {
-    console.warn('GitHub API לא זמין', e);
   }
-  try {
-    const r = await fetch(CONFIG.dataPath + '?t=' + Date.now(), { cache: 'no-store' });
-    if (r.ok) return { envelope: await r.json(), sha: null, from: 'site' };
-  } catch {}
   const cached = lsGet(LS_CACHE);
-  if (cached) {
-    session.online = false;
-    return { envelope: JSON.parse(cached), sha: null, from: 'cache' };
-  }
-  return { envelope: null, sha: null, from: 'none' };
+  if (cached) return { envelope: JSON.parse(cached), version: null, from: 'cache', driveEmpty };
+  try {
+    const r = await fetch(CONFIG.seedPath + '?t=' + Date.now(), { cache: 'no-store' });
+    if (r.ok) return { envelope: await r.json(), version: null, from: 'seed', driveEmpty };
+  } catch {}
+  return { envelope: null };
 }
 
-async function decryptWithSession(envelope) {
-  return normalize(await decryptJson(envelope, session.key));
-}
+const decryptWithSession = async (envelope) => normalize(await decryptJson(envelope, session.key));
 
 /** כניסה למערכת. זורק Error('bad-password') אם הסיסמה שגויה */
 export async function login(password) {
-  const { envelope, sha, from } = await loadEnvelope();
-  if (!envelope) throw new Error('no-data');
-  const salt = unb64(envelope.kdf.salt);
-  const iterations = envelope.kdf.iterations || ITERATIONS;
+  drive.secret = await deriveAuth(password);
+  const res = await loadEnvelope();
+  if (!res.envelope) throw new Error('no-data');
+  const salt = unb64(res.envelope.kdf.salt);
+  const iterations = res.envelope.kdf.iterations || ITERATIONS;
   const raw = await deriveRaw(password, salt, iterations);
   const key = await importAes(raw);
   let data;
   try {
-    data = normalize(await decryptJson(envelope, key));
+    data = normalize(await decryptJson(res.envelope, key));
   } catch {
+    drive.secret = null;
     throw new Error('bad-password');
   }
-  Object.assign(session, { key, raw, salt, iterations, data, sha });
-  await afterUnlock(from);
+  Object.assign(session, { key, raw, salt, iterations, data });
+  if (res.from === 'drive') session.version = res.version;
   saveSession();
+  await afterUnlock(res);
   return session.data;
 }
 
@@ -135,7 +117,7 @@ export async function restoreSession() {
   } catch {
     return false;
   }
-  if (!s || s.exp < Date.now()) {
+  if (!s || s.exp < Date.now() || !s.auth) {
     clearSession();
     return false;
   }
@@ -143,66 +125,49 @@ export async function restoreSession() {
   session.salt = unb64(s.salt);
   session.iterations = s.iterations;
   session.key = await importAes(session.raw);
-  const { envelope, sha, from } = await loadEnvelope();
-  if (!envelope) return false;
+  drive.secret = s.auth;
+  const res = await loadEnvelope();
+  if (!res.envelope) return false;
   try {
-    session.data = await decryptWithSession(envelope);
+    session.data = await decryptWithSession(res.envelope);
   } catch {
+    // הקובץ הוצפן מחדש בסיסמה אחרת (החלפת סיסמה במכשיר אחר)
     clearSession();
     return false;
   }
-  session.sha = sha;
-  await afterUnlock(from);
+  if (res.from === 'drive') session.version = res.version;
+  await afterUnlock(res);
   return true;
 }
 
-async function afterUnlock(from) {
-  // טוקן GitHub מקומי (מוצפן במפתח הסיסמה)
-  const packed = lsGet(LS_TOKEN);
-  session.token = null;
-  if (packed) {
-    try {
-      session.token = await decryptString(packed, session.key);
-    } catch {
-      lsSet(LS_TOKEN, null);
+async function afterUnlock(res) {
+  // שינויים מקומיים שטרם נשמרו ב-Drive
+  if (res.from === 'drive') {
+    const cached = lsGet(LS_CACHE);
+    if (cached && hasPending()) {
+      try {
+        session.data = mergeData(await decryptWithSession(JSON.parse(cached)), session.data);
+      } catch {}
     }
-  }
-  // אם יש טוקן — נטען שוב עם הרשאה כדי לקבל גרסה עדכנית ו-sha
-  if (session.token && from !== 'github-auth') {
-    try {
-      const res = await fetchRemote();
-      if (res.envelope) {
-        session.data = await decryptWithSession(res.envelope);
-        session.sha = res.sha;
-        session.online = true;
-      }
-    } catch {}
-  }
-  // שינויים מקומיים שטרם סונכרנו
-  const cached = lsGet(LS_CACHE);
-  if (cached && hasPending()) {
-    try {
-      const local = await decryptWithSession(JSON.parse(cached));
-      session.data = mergeData(local, session.data);
-    } catch {}
+  } else if (res.driveEmpty) {
+    // Drive מחובר אבל עוד אין בו קובץ נתונים — נעלה את מה שיש
+    lsSet(LS_PENDING, '1');
   }
   await writeCache();
-  if (hasPending() && session.token) sync().catch(() => {});
-  emit(state());
+  emit();
+  if (hasPending() && driveUsable() && session.driveError !== 'network') sync().catch((e) => emit({ error: e.message }));
 }
 
 export function saveSession() {
   try {
     sessionStorage.setItem(
       SS_SESSION,
-      JSON.stringify({ raw: b64(session.raw), salt: b64(session.salt), iterations: session.iterations, exp: Date.now() + CONFIG.idleMinutes * 60000 })
+      JSON.stringify({ raw: b64(session.raw), salt: b64(session.salt), iterations: session.iterations, auth: drive.secret, exp: Date.now() + CONFIG.idleMinutes * 60000 })
     );
   } catch {}
 }
 
-export function touchSession() {
-  if (session.key) saveSession();
-}
+export const touchSession = () => session.key && saveSession();
 
 export function clearSession() {
   try {
@@ -212,128 +177,111 @@ export function clearSession() {
 
 export function logout() {
   clearSession();
-  Object.assign(session, { key: null, raw: null, data: null, sha: null, token: null });
+  drive.secret = null;
+  Object.assign(session, { key: null, raw: null, data: null, version: null, driveOk: false, driveError: null });
 }
 
-async function makeEnvelope() {
-  return encryptJson(session.data, session.key, session.salt, session.iterations);
-}
+const makeEnvelope = () => encryptJson(session.data, session.key, session.salt, session.iterations);
 
 async function writeCache() {
   lsSet(LS_CACHE, JSON.stringify(await makeEnvelope()));
 }
 
-export function state() {
-  return {
-    connected: !!session.token,
-    pending: hasPending(),
-    online: session.online,
-    lastSync: session.lastSync,
-  };
-}
-
-/** שמירת הנתונים: מקומית מיד, ול-GitHub אם יש טוקן */
-export async function save(message = 'עדכון נתונים') {
+/** שמירת הנתונים: מקומית מיד, ול-Drive אם מחובר */
+export async function save() {
   session.data.updatedAt = new Date().toISOString();
   lsSet(LS_PENDING, '1');
   await writeCache();
-  emit({ ...state(), saving: true });
-  if (!session.token) {
-    emit(state());
-    return { synced: false, reason: 'no-token' };
+  if (!driveUsable()) {
+    emit();
+    return { synced: false, reason: 'no-drive' };
   }
+  emit({ saving: true });
   try {
-    await sync(message);
+    await sync();
     return { synced: true };
   } catch (e) {
     console.error(e);
-    emit({ ...state(), error: e.message });
+    emit({ error: e.message });
     return { synced: false, reason: e.message };
   }
 }
 
-async function putRemote(message) {
-  const branch = await getBranch();
-  const envelope = await makeEnvelope();
-  const content = b64(new TextEncoder().encode(JSON.stringify(envelope, null, 1)));
-  const body = { message, content, branch };
-  if (session.sha) body.sha = session.sha;
-  const r = await fetch(`${API}/repos/${CONFIG.owner}/${CONFIG.repo}/contents/${CONFIG.dataPath}`, {
-    method: 'PUT',
-    headers: { ...ghHeaders(), 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
-  return r;
-}
-
-export async function sync(message = 'עדכון נתונים') {
-  if (!session.token) throw new Error('no-token');
-  let r = await putRemote(message);
-  if (r.status === 409 || r.status === 422) {
-    // מישהו שמר במקביל — ממזגים ומנסים שוב
-    const res = await fetchRemote();
-    if (res.envelope) {
-      const remote = await decryptWithSession(res.envelope);
-      session.data = mergeData(session.data, remote);
-      session.sha = res.sha;
-    } else session.sha = null;
-    r = await putRemote(message);
+/** העלאת הנתונים ל-Drive, כולל מיזוג אם נשמרו שינויים ממכשיר אחר */
+export async function sync() {
+  if (!driveUrl() || !drive.secret) throw new Error('Drive לא מחובר');
+  const put = async () => drivePutData(JSON.stringify(await makeEnvelope()), session.version);
+  let res;
+  try {
+    res = await put();
+  } catch (e) {
+    if (e.auth) {
+      session.driveError = 'auth';
+      session.driveOk = false;
+      emit();
+      throw new Error('קוד הגישה ב-Apps Script לא תואם — ראה עמוד Drive');
+    }
+    if (!e.conflict) {
+      session.driveOk = false;
+      session.driveError = 'network';
+      emit();
+      throw e;
+    }
+    const remote = await fetchDrive();
+    if (remote.envelope) session.data = mergeData(session.data, await decryptWithSession(remote.envelope));
+    session.version = remote.version;
+    res = await put();
   }
-  if (r.status === 401 || r.status === 403) throw new Error('הטוקן של GitHub לא תקין או חסרות לו הרשאות');
-  if (!r.ok) throw new Error('שגיאת GitHub ' + r.status);
-  const j = await r.json();
-  session.sha = j.content.sha;
-  session.online = true;
+  session.version = res.version;
+  session.driveOk = true;
+  session.driveError = null;
   session.lastSync = new Date().toISOString();
   lsSet(LS_PENDING, null);
   await writeCache();
-  emit(state());
+  emit();
 }
 
-/** שמירת/בדיקת טוקן GitHub */
-export async function setToken(token) {
-  token = (token || '').trim();
-  if (!token) {
-    session.token = null;
-    lsSet(LS_TOKEN, null);
-    emit(state());
-    return true;
-  }
-  const r = await fetch(`${API}/repos/${CONFIG.owner}/${CONFIG.repo}`, {
-    headers: { Accept: 'application/vnd.github+json', Authorization: 'Bearer ' + token },
-    cache: 'no-store',
+/** חיבור (או החלפה) של כתובת ה-Web app */
+export async function connectDrive(url) {
+  url = (url || '').trim();
+  if (!/^https:\/\/script\.google\.com\/macros\/s\/[\w-]+\/exec$/.test(url)) throw new Error('הכתובת צריכה להתחיל ב-https://script.google.com/macros/s/ ולהסתיים ב-/exec');
+  const ping = await drivePing(url).catch((e) => {
+    throw new Error(e.auth ? 'קוד הגישה בסקריפט לא תואם. ודא שהדבקת את הקוד המלא מהאתר, שמרת, ופרסמת גרסה חדשה.' : e.message);
   });
-  if (!r.ok) throw new Error('הטוקן לא תקין (' + r.status + ')');
-  const j = await r.json();
-  if (j.permissions && !j.permissions.push) throw new Error('לטוקן אין הרשאת כתיבה (Contents: Read and write)');
-  session.token = token;
-  session.branch = j.default_branch;
-  lsSet(LS_TOKEN, await encryptString(token, session.key));
-  // מושכים את הגרסה העדכנית לפני סנכרון
-  try {
-    const res = await fetchRemote();
-    if (res.envelope) {
-      const remote = await decryptWithSession(res.envelope);
-      session.data = hasPending() ? mergeData(session.data, remote) : remote;
-      session.sha = res.sha;
+  saveDriveUrl(url);
+  session.driveOk = true;
+  session.driveError = null;
+  // אם כבר יש נתונים ב-Drive — ממזגים איתם
+  const remote = await fetchDrive();
+  session.version = remote.version;
+  if (remote.envelope) {
+    try {
+      session.data = mergeData(session.data, await decryptWithSession(remote.envelope));
+    } catch {
+      throw new Error('ב-Drive יש קובץ נתונים שהוצפן בסיסמה אחרת');
     }
-  } catch {}
-  if (hasPending()) await sync('סנכרון שינויים מקומיים');
-  emit(state());
-  return true;
+  }
+  lsSet(LS_PENDING, '1');
+  await sync();
+  return ping;
 }
 
-/** החלפת סיסמה — מצפין מחדש עם מלח חדש */
+export function disconnectDrive() {
+  saveDriveUrl('');
+  session.driveOk = false;
+  emit();
+}
+
+/** החלפת סיסמה — מצפין מחדש ומעדכן את קוד הגישה בסקריפט */
 export async function changePassword(newPassword) {
-  const { randomBytes } = await import('./crypto.js');
+  const newAuth = await deriveAuth(newPassword);
+  if (driveUsable()) await driveRotate(newAuth);
+  drive.secret = newAuth;
   const salt = randomBytes(16);
   const raw = await deriveRaw(newPassword, salt, ITERATIONS);
-  const key = await importAes(raw);
-  const token = session.token;
-  Object.assign(session, { salt, raw, key, iterations: ITERATIONS });
-  if (token) lsSet(LS_TOKEN, await encryptString(token, key));
+  Object.assign(session, { salt, raw, key: await importAes(raw), iterations: ITERATIONS });
   saveSession();
-  return save('החלפת מפתח הצפנה');
+  return save();
 }
 
 export async function exportEncrypted() {
@@ -343,6 +291,5 @@ export async function exportEncrypted() {
 export async function importEncrypted(text, password) {
   const env = JSON.parse(text);
   const raw = await deriveRaw(password, unb64(env.kdf.salt), env.kdf.iterations);
-  const key = await importAes(raw);
-  return normalize(await decryptJson(env, key));
+  return normalize(await decryptJson(env, await importAes(raw)));
 }

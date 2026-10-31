@@ -72,3 +72,11 @@ export async function decryptString(packed, key) {
   const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: unb64(iv) }, key, unb64(ct));
   return dec.decode(pt);
 }
+
+/** קוד גישה ל-Drive שנגזר מהסיסמה (כך שאין קוד נוסף לזכור או להזין בכל מכשיר) */
+export const AUTH_SALT = 'ariel-receipts/drive-auth/v1';
+export const AUTH_ITERATIONS = 200000;
+export async function deriveAuth(password) {
+  const raw = await deriveRaw(password, enc.encode(AUTH_SALT), AUTH_ITERATIONS);
+  return Array.from(raw, (b) => b.toString(16).padStart(2, '0')).join('');
+}

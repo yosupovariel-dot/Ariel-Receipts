@@ -9,7 +9,7 @@ import {
 import * as store from './store.js';
 import { session } from './store.js';
 import { receiptHTML, receiptPdf, printReceipt, pdfFileName } from './receipt-doc.js';
-import { driveConfigured, drivePing, driveList, driveUpload, driveBackup } from './drive.js';
+import { drive, driveUrl, driveConfigured, drivePing, driveList, driveUpload } from './drive.js';
 import { LEGAL } from './legal.js';
 import { initA11y } from './a11y.js';
 
@@ -122,6 +122,9 @@ function setAttempts(a) {
 }
 
 function showLogin(msg) {
+  if (!msg && pendingLoginMsg) msg = pendingLoginMsg;
+  pendingLoginMsg = '';
+  if (!$('#login-view').hidden && $('#login-form') && !msg) return;
   document.body.classList.remove('authed');
   $('#app').hidden = true;
   const view = $('#login-view');
@@ -218,9 +221,12 @@ function enterApp() {
 
 function logout(msg) {
   store.logout();
-  location.hash = '#/login';
-  showLogin(msg);
+  if (location.hash !== '#/login') {
+    pendingLoginMsg = msg;
+    location.hash = '#/login'; // route() יציג את מסך הכניסה
+  } else showLogin(msg);
 }
+let pendingLoginMsg = '';
 
 // ניתוק אוטומטי
 let lastTouch = 0;
@@ -249,9 +255,11 @@ setInterval(() => {
 function renderSync(st) {
   const el = $('#sync');
   if (!el) return;
-  let cls = 'ok', text = 'שמור ב-GitHub';
+  let cls = 'ok', text = 'שמור ב-Drive';
   if (st.saving) (cls = 'busy'), (text = 'שומר…');
-  else if (!st.connected) (cls = 'warn'), (text = 'GitHub לא מחובר');
+  else if (!st.configured) (cls = 'warn'), (text = 'Drive לא מחובר');
+  else if (st.authError) (cls = 'err'), (text = 'צריך לעדכן קוד ב-Drive');
+  else if (!st.connected) (cls = 'warn'), (text = 'אין חיבור ל-Drive');
   else if (st.error) (cls = 'err'), (text = 'שגיאת שמירה');
   else if (st.pending) (cls = 'warn'), (text = 'ממתין לסנכרון');
   el.className = 'sync sync-' + cls;
@@ -262,8 +270,8 @@ store.onSyncChange(renderSync);
 
 async function persist(message) {
   const res = await store.save(message);
-  if (!res.synced && res.reason === 'no-token') toast('נשמר במכשיר. חבר את GitHub בהגדרות כדי לשמור בענן.', 'warn', 5000);
-  else if (!res.synced) toast('נשמר במכשיר, אך השמירה ל-GitHub נכשלה: ' + res.reason, 'error', 6000);
+  if (!res.synced && res.reason === 'no-drive') toast('נשמר במכשיר. חבר את Google Drive כדי שהנתונים יישמרו גם שם.', 'warn', 5000);
+  else if (!res.synced) toast('נשמר במכשיר, אך השמירה ל-Drive נכשלה: ' + res.reason, 'error', 6000);
   return res;
 }
 
@@ -350,11 +358,12 @@ function viewDashboard() {
   const st = store.state();
 
   const banners = [];
-  if (!st.connected)
-    banners.push(html`<div class="banner banner-warn"><strong>הנתונים נשמרים כרגע רק במכשיר הזה.</strong> כדי שאף קבלה לא תאבד — <a href="#/settings#github">חבר את GitHub</a> (פעם אחת לכל מכשיר).</div>`);
-  if (st.pending && st.connected) banners.push(html`<div class="banner banner-warn">יש שינויים שטרם נשמרו ב-GitHub. <button class="link-btn" data-act="sync">סנכרן עכשיו</button></div>`);
+  if (!st.configured)
+    banners.push(html`<div class="banner banner-warn"><strong>הנתונים נשמרים כרגע רק במכשיר הזה.</strong> כדי שאף קבלה לא תאבד — <a href="#/archive">חבר את Google Drive</a>.</div>`);
+  else if (st.authError)
+    banners.push(html`<div class="banner banner-err"><strong>החיבור ל-Drive לא עובד:</strong> הקוד שב-Apps Script לא תואם. <a href="#/archive">לתיקון</a></div>`);
+  else if (st.pending) banners.push(html`<div class="banner banner-warn">יש שינויים שטרם נשמרו ב-Drive. <button class="link-btn" data-act="sync">שמירה עכשיו</button></div>`);
   if (!data.settings.numberConfirmed) banners.push(html`<div class="banner banner-info">הקבלה הבאה תקבל את המספר <strong>${nextNumber(data)}</strong>. לשינוי — <a href="#/settings#numbering">הגדרות מספור</a>.</div>`);
-  if (!driveConfigured()) banners.push(html`<div class="banner banner-info">רוצה שכל קבלה תישמר גם ב-Google Drive? <a href="#/archive">לחיבור Drive</a></div>`);
   if (ceiling && pct >= 85) banners.push(html`<div class="banner banner-err">שים לב: הגעת ל-${pct.toFixed(0)}% מתקרת המחזור של עוסק פטור לשנת ${year}. כדאי להתייעץ עם רואה חשבון.</div>`);
 
   main.innerHTML = html`
@@ -390,8 +399,8 @@ function viewDashboard() {
 
   main.querySelector('[data-act=sync]')?.addEventListener('click', async () => {
     try {
-      await store.sync('סנכרון ידני');
-      toast('סונכרן בהצלחה');
+      await store.sync();
+      toast('נשמר ב-Drive');
       route();
     } catch (e) {
       toast(e.message, 'error');
@@ -1108,59 +1117,13 @@ async function archiveForm(existing, prefill = {}) {
 
 /* ───────────────────────── ארכיון Drive ───────────────────────── */
 
-function viewArchive() {
+function viewArchive(parts, q) {
   const data = D();
-  if (!driveConfigured()) {
-    main.innerHTML = html`<div class="page">
-      <div class="page-head"><h1>ארכיון Google Drive</h1></div>
-      <section class="card prose">
-        <h2>חיבור תיקיית הקבלות ב-Drive</h2>
-        <p>אחרי החיבור: כל הקבלות שכבר יש לך ב-Drive יוצגו כאן לפי שנים, וכל קבלה חדשה תישמר אוטומטית כ-PDF בתיקיית השנה המתאימה. הסקריפט ניגש <strong>רק</strong> לתיקייה שתבחר.</p>
-        <ol class="steps">
-          <li>ב-Google Drive, פתח את תיקיית הקבלות הראשית (זו שבתוכה תיקיות 2024, 2025…). העתק מהכתובת את החלק שאחרי <code dir="ltr">folders/</code> — זה מזהה התיקייה.</li>
-          <li>היכנס ל-<a href="https://script.google.com/home/projects/create" target="_blank" rel="noopener noreferrer">script.google.com</a> ← פרויקט חדש. מחק את מה שכתוב והדבק את התוכן של הקובץ <a href="https://github.com/${CONFIG.owner}/${CONFIG.repo}/blob/HEAD/google-apps-script/Code.gs" target="_blank" rel="noopener noreferrer">Code.gs</a>.</li>
-          <li>בשורה <code dir="ltr">FOLDER_ID</code> הדבק את מזהה התיקייה. בשורה <code dir="ltr">SECRET</code> הדבק את הקוד הסודי: <code dir="ltr" class="secret" id="gen-secret"></code> <button type="button" class="link-btn" id="copy-secret">העתקה</button></li>
-          <li>שמור (Ctrl+S), בחר בפונקציה <code dir="ltr">testSetup</code> ולחץ <strong>Run</strong> ← אשר את ההרשאות לחשבון שלך.</li>
-          <li>לחץ <strong>Deploy ← New deployment</strong> ← סוג: <strong>Web app</strong>. Execute as: <strong>Me</strong>. Who has access: <strong>Anyone</strong>. לחץ Deploy והעתק את ה-URL.</li>
-          <li>הדבק כאן את ה-URL ולחץ "חיבור":</li>
-        </ol>
-        <form id="drive-form" class="drive-form">
-          <div class="field"><label for="d-url">כתובת ה-Web app</label><input id="d-url" type="url" dir="ltr" required placeholder="https://script.google.com/macros/s/…/exec"></div>
-          <div class="field"><label for="d-secret">קוד סודי (זהה לשורת SECRET בסקריפט)</label><input id="d-secret" dir="ltr" required autocomplete="off" spellcheck="false"></div>
-          <button class="btn btn-primary">חיבור ובדיקה</button>
-        </form>
-      </section>
-    </div>`.__html;
-    const secret = Array.from(crypto.getRandomValues(new Uint8Array(18)), (b) => b.toString(16).padStart(2, '0')).join('');
-    $('#gen-secret').textContent = secret;
-    $('#d-secret').value = secret;
-    $('#copy-secret').onclick = () => navigator.clipboard.writeText(secret).then(() => toast('הקוד הועתק'));
-    $('#drive-form').onsubmit = async (e) => {
-      e.preventDefault();
-      const btn = e.submitter;
-      btn.disabled = true;
-      data.settings.driveUrl = $('#d-url').value.trim();
-      data.settings.driveSecret = $('#d-secret').value;
-      try {
-        const res = await drivePing();
-        audit(data, 'drive-connect', res.folder);
-        await persist('חיבור Google Drive');
-        toast(`מחובר לתיקייה "${res.folder}"`);
-        route();
-      } catch (ex) {
-        data.settings.driveUrl = '';
-        data.settings.driveSecret = '';
-        toast('החיבור נכשל: ' + ex.message, 'error', 7000);
-      } finally {
-        btn.disabled = false;
-      }
-    };
-    return;
-  }
-
+  const st = store.state();
+  if (!driveUrl() || st.authError || q.get('setup')) return driveSetup(st);
   main.innerHTML = html`<div class="page">
     <div class="page-head"><h1>ארכיון Google Drive</h1>
-      <div class="head-actions"><button class="btn btn-ghost" id="backup-drive">גיבוי נתונים ל-Drive</button><button class="btn btn-primary" id="reload">רענון</button></div></div>
+      <div class="head-actions"><a class="btn btn-ghost" href="#/archive?setup=1">הגדרות חיבור</a><button class="btn btn-primary" id="reload">רענון</button></div></div>
     <p class="muted">כל קובצי הקבלות בתיקיית ה-Drive שלך, מסודרים לפי שנים. קבצים שאינם רשומים במערכת אפשר להוסיף לסיכומים בלחיצה.</p>
     <div id="drive-list"><div class="card loading" aria-busy="true">טוען מ-Google Drive…</div></div>
   </div>`.__html;
@@ -1208,18 +1171,99 @@ function viewArchive() {
     }
   });
   $('#reload').onclick = load;
-  $('#backup-drive').onclick = async (e) => {
-    e.target.disabled = true;
+  load();
+}
+
+/** מסך חיבור Drive: מייצר קוד Apps Script מוכן להדבקה */
+const LS_FOLDER = 'ar_drive_folder_v1';
+function driveSetup(st) {
+  let folder = '';
+  try {
+    folder = localStorage.getItem(LS_FOLDER) || '';
+  } catch {}
+  main.innerHTML = html`<div class="page">
+    <div class="page-head"><h1>חיבור Google Drive</h1></div>
+    ${st.authError ? html`<div class="banner banner-err"><strong>הקוד שב-Apps Script לא תואם לסיסמה.</strong> צור את הקוד מחדש כאן (שלב 1), הדבק אותו ב-Apps Script במקום הקוד הקיים, ופרסם גרסה חדשה (שלב 3).</div>` : ''}
+    <section class="card prose">
+      <p>כל הנתונים של המערכת (מוצפנים) וכל קובצי ה-PDF של הקבלות יישמרו בתיקיית הקבלות שלך ב-Drive, עם גיבוי יומי אוטומטי. הסקריפט רץ בחשבון הגוגל שלך וניגש <strong>רק</strong> לתיקייה הזו.</p>
+
+      <h3>שלב 1 — יצירת הקוד</h3>
+      <div class="field"><label for="d-folder">הקישור לתיקיית הקבלות הראשית ב-Drive (או המזהה שלה)</label>
+        <input id="d-folder" dir="ltr" value="${folder}" placeholder="https://drive.google.com/drive/folders/…"></div>
+      <button type="button" class="btn btn-primary" id="gen-code">יצירת הקוד</button>
+      <div id="code-box" hidden>
+        <div class="field"><label for="d-code">הקוד המוכן (כבר כולל את התיקייה וקוד הגישה שלך)</label>
+          <textarea id="d-code" dir="ltr" rows="8" readonly spellcheck="false" class="code-area"></textarea></div>
+        <button type="button" class="btn btn-primary" id="copy-code">העתקת הקוד</button>
+      </div>
+
+      <h3>שלב 2 — הדבקה ב-Apps Script</h3>
+      <ol class="steps">
+        <li>פתח את <a href="https://script.google.com/home" target="_blank" rel="noopener noreferrer">script.google.com</a> ואת הפרויקט שיצרת (או צור פרויקט חדש).</li>
+        <li>מחק את כל הקוד שבעורך, הדבק את הקוד שהעתקת, ושמור (Ctrl+S).</li>
+        <li>בחר למעלה בפונקציה <code dir="ltr">testSetup</code> ולחץ <strong>"הפעלה"</strong>. אם מבקשים הרשאות — אשר (במסך "Google לא אימתה" לחץ "מתקדם" ← "מעבר אל…").</li>
+      </ol>
+
+      <h3>שלב 3 — פרסום</h3>
+      <ol class="steps">
+        <li><strong>בפעם הראשונה:</strong> "לפריסה" ← "פריסה חדשה" ← גלגל השיניים ← "אפליקציית אינטרנט". הפעלה בתור: <strong>אני</strong>. למי יש גישה: <strong>כל אחד</strong> ← "פריסה". העתק את הכתובת שמסתיימת ב-<code dir="ltr">/exec</code>.</li>
+        <li><strong>אם כבר פרסמת בעבר:</strong> "לפריסה" ← "ניהול פריסות" ← עיפרון ✏️ ← גרסה: <strong>"גרסה חדשה"</strong> ← "פריסה". הכתובת נשארת אותה כתובת.</li>
+      </ol>
+
+      <h3>שלב 4 — חיבור</h3>
+      <form id="drive-form" class="drive-form">
+        <div class="field"><label for="d-url">כתובת ה-Web app</label><input id="d-url" type="url" dir="ltr" required value="${driveUrl()}" placeholder="https://script.google.com/macros/s/…/exec"></div>
+        <button class="btn btn-primary">חיבור ובדיקה</button>
+      </form>
+    </section>
+  </div>`.__html;
+
+  const parseFolder = (v) => {
+    v = v.trim();
+    const m = v.match(/folders\/([\w-]+)/) || v.match(/[?&]id=([\w-]+)/);
+    return m ? m[1] : /^[\w-]{15,}$/.test(v) ? v : '';
+  };
+  $('#gen-code').onclick = async () => {
+    const id = parseFolder($('#d-folder').value);
+    if (!id) return toast('לא זוהה מזהה תיקייה. הדבק את הכתובת המלאה מ-Drive.', 'error');
     try {
-      await driveBackup(await store.exportEncrypted());
-      toast('גיבוי מוצפן נשמר ב-Drive');
+      localStorage.setItem(LS_FOLDER, $('#d-folder').value.trim());
+    } catch {}
+    const r = await fetch('google-apps-script/Code.gs?t=' + Date.now(), { cache: 'no-store' });
+    if (!r.ok) return toast('לא ניתן לטעון את הקוד', 'error');
+    const code = (await r.text()).replace("'PASTE_FOLDER_ID_HERE'", `'${id}'`).replace("'PASTE_SECRET_FROM_SITE'", `'${drive.secret}'`);
+    $('#d-code').value = code;
+    $('#code-box').hidden = false;
+    $('#copy-code').focus();
+  };
+  $('#copy-code').onclick = async () => {
+    try {
+      await navigator.clipboard.writeText($('#d-code').value);
+    } catch {
+      $('#d-code').select();
+      document.execCommand('copy');
+    }
+    toast('הקוד הועתק — הדבק אותו ב-Apps Script');
+  };
+  $('#drive-form').onsubmit = async (e) => {
+    e.preventDefault();
+    const btn = e.submitter;
+    btn.disabled = true;
+    btn.textContent = 'מתחבר…';
+    try {
+      const res = await store.connectDrive($('#d-url').value);
+      audit(D(), 'drive-connect', res.folder);
+      await store.save();
+      toast(`מחובר לתיקייה "${res.folder}" — הנתונים נשמרים ב-Drive`);
+      location.hash = '#/archive';
+      route();
     } catch (ex) {
-      toast('הגיבוי נכשל: ' + ex.message, 'error');
+      toast('החיבור נכשל: ' + ex.message, 'error', 9000);
     } finally {
-      e.target.disabled = false;
+      btn.disabled = false;
+      btn.textContent = 'חיבור ובדיקה';
     }
   };
-  load();
 }
 
 /* ───────────────────────── לקוחות ───────────────────────── */
@@ -1299,26 +1343,6 @@ function viewSettings() {
   main.innerHTML = html`<div class="page settings">
     <div class="page-head"><h1>הגדרות</h1></div>
 
-    <section class="card" id="github">
-      <h2>שמירה בענן — GitHub ${st.connected ? html`<span class="chip chip-ok">מחובר</span>` : html`<span class="chip chip-err">לא מחובר</span>`}</h2>
-      <p>כל הנתונים נשמרים <strong>מוצפנים</strong> במאגר <code dir="ltr">${CONFIG.owner}/${CONFIG.repo}</code>, עם היסטוריית גרסאות מלאה. צריך לחבר פעם אחת בכל מכשיר.</p>
-      <details ${st.connected ? '' : 'open'}><summary>איך יוצרים טוקן? (2 דקות)</summary>
-        <ol class="steps">
-          <li>היכנס ל-<a href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noopener noreferrer">יצירת Fine-grained token ב-GitHub</a>.</li>
-          <li>שם: <code>receipts-site</code>. תוקף (Expiration): בחר שנה או "No expiration".</li>
-          <li>Repository access: <strong>Only select repositories</strong> ← בחר <code dir="ltr">${CONFIG.repo}</code>.</li>
-          <li>Permissions ← Repository permissions ← <strong>Contents: Read and write</strong>.</li>
-          <li>Generate token, העתק והדבק כאן.</li>
-        </ol>
-      </details>
-      <form id="gh-form" class="inline-form">
-        <div class="field grow"><label for="gh-token">טוקן GitHub</label><input id="gh-token" type="password" dir="ltr" autocomplete="off" placeholder="${st.connected ? '•••••••• (שמור במכשיר, מוצפן)' : 'github_pat_…'}"></div>
-        <button class="btn btn-primary">${st.connected ? 'החלפה' : 'חיבור'}</button>
-        ${st.connected ? html`<button type="button" class="btn btn-ghost" id="gh-sync">סנכרון עכשיו</button><button type="button" class="btn btn-danger-ghost" id="gh-remove">ניתוק מכשיר זה</button>` : ''}
-      </form>
-      ${st.lastSync ? html`<p class="muted small">סונכרן לאחרונה: ${fmtDateTime(st.lastSync)}</p>` : ''}
-    </section>
-
     <section class="card" id="business">
       <h2>פרטי העסק</h2>
       <p class="muted small">יופיעו בקבלות חדשות. קבלות שכבר הופקו נשארות כפי שהיו.</p>
@@ -1355,16 +1379,18 @@ function viewSettings() {
     </section>
 
     <section class="card" id="drive">
-      <h2>Google Drive ${driveConfigured() ? html`<span class="chip chip-ok">מחובר</span>` : html`<span class="chip chip-lav">לא מחובר</span>`}</h2>
-      ${driveConfigured()
-        ? html`<label class="switch"><input type="checkbox" id="drive-auto" ${s.driveAutoUpload ? 'checked' : ''}> העלאה אוטומטית של כל קבלה חדשה ל-Drive</label>
-          <div class="btn-row"><button class="btn btn-ghost" id="drive-test">בדיקת חיבור</button><button class="btn btn-danger-ghost" id="drive-off">ניתוק Drive</button></div>`
-        : html`<p><a class="btn btn-primary" href="#/archive">להגדרת החיבור</a></p>`}
+      <h2>שמירה ב-Google Drive ${st.configured && st.connected ? html`<span class="chip chip-ok">מחובר</span>` : st.authError ? html`<span class="chip chip-err">צריך לעדכן קוד</span>` : html`<span class="chip chip-err">לא מחובר</span>`}</h2>
+      <p>כל הנתונים נשמרים <strong>מוצפנים</strong> בתיקיית הקבלות שלך ב-Drive, עם גיבוי יומי אוטומטי, ונשמר גם עותק מוצפן בדפדפן.</p>
+      ${st.lastSync ? html`<p class="muted small">נשמר לאחרונה: ${fmtDateTime(st.lastSync)}</p>` : ''}
+      ${st.configured
+        ? html`<label class="switch"><input type="checkbox" id="drive-auto" ${s.driveAutoUpload ? 'checked' : ''}> שמירת PDF של כל קבלה חדשה בתיקיית השנה</label>
+          <div class="btn-row"><button class="btn btn-ghost" id="drive-sync">שמירה עכשיו</button><button class="btn btn-ghost" id="drive-test">בדיקת חיבור</button><a class="btn btn-ghost" href="#/archive?setup=1">הגדרות חיבור</a><button class="btn btn-danger-ghost" id="drive-off">ניתוק מכשיר זה</button></div>`
+        : html`<p><a class="btn btn-primary" href="#/archive">לחיבור Drive</a></p>`}
     </section>
 
     <section class="card" id="backup">
       <h2>גיבוי ושחזור</h2>
-      <p class="muted small">הנתונים כבר שמורים ב-GitHub עם היסטוריה. מומלץ בנוסף לייצא גיבוי פעם בחודש.</p>
+      <p class="muted small">הנתונים נשמרים ב-Drive עם גיבוי יומי. אפשר בנוסף להוריד גיבוי מוצפן למחשב.</p>
       <div class="btn-row">
         <button class="btn btn-ghost" id="bk-export">הורדת גיבוי מוצפן</button>
         <button class="btn btn-ghost" id="bk-csv">ייצוא כל הקבלות לאקסל</button>
@@ -1380,7 +1406,7 @@ function viewSettings() {
           <div class="field"><label for="pw-new">סיסמה חדשה</label><input id="pw-new" name="new1" type="password" autocomplete="new-password" minlength="8" required></div>
           <div class="field"><label for="pw-new2">אימות סיסמה חדשה</label><input id="pw-new2" name="new2" type="password" autocomplete="new-password" minlength="8" required></div>
         </div>
-        <p class="notice small">אין שחזור סיסמה — הסיסמה היא מפתח ההצפנה. רשום אותה במקום בטוח. לאחר ההחלפה יש לחבר מחדש את GitHub במכשירים אחרים.</p>
+        <p class="notice small">אין שחזור סיסמה — הסיסמה היא מפתח ההצפנה. רשום אותה במקום בטוח. הקוד ב-Drive מתעדכן אוטומטית; במכשירים אחרים פשוט נכנסים עם הסיסמה החדשה.</p>
         <button class="btn btn-primary">החלפת סיסמה</button>
       </form>
       <hr>
@@ -1398,33 +1424,14 @@ function viewSettings() {
     if (id) setTimeout(() => document.getElementById(id)?.scrollIntoView({ behavior: 'smooth' }), 60);
   }
 
-  $('#gh-form').onsubmit = async (e) => {
-    e.preventDefault();
-    const btn = e.submitter;
-    btn.disabled = true;
+  $('#drive-sync')?.addEventListener('click', async () => {
     try {
-      await store.setToken($('#gh-token').value);
-      toast('GitHub מחובר — הנתונים נשמרים בענן');
-      route();
-    } catch (ex) {
-      toast(ex.message, 'error', 6000);
-    } finally {
-      btn.disabled = false;
-    }
-  };
-  $('#gh-sync')?.addEventListener('click', async () => {
-    try {
-      await store.sync('סנכרון ידני');
-      toast('סונכרן');
+      await store.sync();
+      toast('נשמר ב-Drive');
       route();
     } catch (e) {
       toast(e.message, 'error');
     }
-  });
-  $('#gh-remove')?.addEventListener('click', async () => {
-    if (!(await confirmBox('ניתוק GitHub', 'הטוקן יימחק ממכשיר זה. הנתונים ב-GitHub לא יימחקו.', 'ניתוק', true))) return;
-    await store.setToken('');
-    route();
   });
   $('#biz-form').onsubmit = async (e) => {
     e.preventDefault();
@@ -1459,10 +1466,8 @@ function viewSettings() {
     }
   });
   $('#drive-off')?.addEventListener('click', async () => {
-    if (!(await confirmBox('ניתוק Drive', 'המערכת תפסיק להעלות קבלות ל-Drive. הקבצים הקיימים נשארים.', 'ניתוק', true))) return;
-    data.settings.driveUrl = '';
-    data.settings.driveSecret = '';
-    await persist('ניתוק Drive');
+    if (!(await confirmBox('ניתוק Drive', 'המכשיר הזה יפסיק לשמור ב-Drive (הנתונים ב-Drive לא יימחקו). אפשר לחבר מחדש בכל רגע.', 'ניתוק', true))) return;
+    store.disconnectDrive();
     route();
   });
   $('#bk-export').onclick = async () => {
