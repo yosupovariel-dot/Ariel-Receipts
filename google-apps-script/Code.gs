@@ -62,8 +62,10 @@ function list_(root) {
     const sub = folders.next();
     const name = sub.getName();
     if (name === BACKUP_FOLDER) continue;
+    const m = name.match(/(19|20)\d{2}/);
+    const label = m ? m[0] : name;
     const files = sub.getFiles();
-    while (files.hasNext()) add(name, files.next());
+    while (files.hasNext()) add(label, files.next());
   }
   const loose = root.getFiles();
   while (loose.hasNext()) add('ללא שנה', loose.next());
@@ -71,9 +73,19 @@ function list_(root) {
   return years;
 }
 
+/** מוצא תיקיית שנה קיימת (למשל "2025" או "קבלות 2025"), ואם אין — יוצר "קבלות <שנה>" */
 function yearFolder_(root, year) {
-  const it = root.getFoldersByName(year);
-  return it.hasNext() ? it.next() : root.createFolder(year);
+  const exact = root.getFoldersByName(year);
+  if (exact.hasNext()) return exact.next();
+  if (/^\d{4}$/.test(year)) {
+    const all = root.getFolders();
+    while (all.hasNext()) {
+      const f = all.next();
+      if (new RegExp('(^|\\D)' + year + '(\\D|$)').test(f.getName())) return f;
+    }
+    return root.createFolder('קבלות ' + year);
+  }
+  return root.createFolder(year);
 }
 
 function upload_(root, body) {
